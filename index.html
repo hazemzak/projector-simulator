@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Projector placement simulator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header id="banner">
+  <h1>Projector placement simulator</h1>
+  <div id="provenance"></div>
+</header>
+<main id="layout">
+  <aside id="col-left">
+    <section id="panel-projector"></section>
+    <section id="panel-display"></section>
+    <section id="panel-target"></section>
+    <section id="panel-obstacles"></section>
+    <section id="panel-room"></section>
+  </aside>
+  <div id="col-centre">
+    <nav id="viewbar"></nav>
+    <div id="canvas-host"></div>
+  </div>
+  <aside id="col-right">
+    <section id="panel-readouts"></section>
+    <section id="panel-warnings"></section>
+    <section id="panel-placements"></section>
+  </aside>
+</main>
+<div id="modal-host"></div>
+
+<script src="vendor/three-r170.bundle.min.js"></script>
+<script src="data/projectors.js"></script>
+<script src="src/core/optics.js"></script>
+<script src="src/core/room.js"></script>
+<script src="src/core/model.js"></script>
+<script src="src/core/analysis.js"></script>
+<script src="src/render/shaders.js"></script>
+<script src="src/render/testcard.js"></script>
+<script src="src/render/scene.js"></script>
+<script src="src/ui/panels.js"></script>
+<script src="src/ui/manip.js"></script>
+<script src="src/ui/storage.js"></script>
+<script src="src/ui/export.js"></script>
+<script src="src/selftest.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
