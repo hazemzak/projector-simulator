@@ -308,6 +308,7 @@
   function fmtVal(v) { return typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v); }
 
   function labelOfRoomKey(key) {
+    if (PS.Room && PS.Room.WALL_REFLECTANCE && key === 'wallReflectance') return PS.Room.WALL_REFLECTANCE.label;
     var ps = (PS.Room && PS.Room.PARAMS) || [];
     for (var i = 0; i < ps.length; i++) if (ps[i].key === key) return ps[i].label || key;
     return key;

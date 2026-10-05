@@ -48,8 +48,12 @@
   const PARAMS = ROWS.map(function (r) {
     return { key: r[0], label: r[1], group: r[2], def: r[3], low: r[4], high: r[5], status: r[6], unit: 'm', definition: r[7] };
   });
+  const WALL_REFLECTANCE = { key: 'wallReflectance', label: 'Wall reflectance', group: 'Room',
+    def: 0.50, low: 0.05, high: 0.95, status: 'estimate', unit: '',
+    definition: 'fraction of light reflected by the matte grey wall' };
   const PARAM_BY_KEY = {};
   PARAMS.forEach(function (p) { PARAM_BY_KEY[p.key] = p; });
+  PARAM_BY_KEY.wallReflectance = WALL_REFLECTANCE;
 
   const COLORS = {
     wallGrey: '#a3a8b2', wallWhite: '#efefea', ceiling: '#f2f2ee', floor: '#7b4f35', skirting: '#f4f4f0',
@@ -61,12 +65,14 @@
   function defaults() {
     const o = {};
     PARAMS.forEach(function (p) { o[p.key] = p.def; });
+    o.wallReflectance = WALL_REFLECTANCE.def;
     return o;
   }
 
   function defaultStatus() {
     const o = {};
     PARAMS.forEach(function (p) { o[p.key] = p.status; });
+    o.wallReflectance = WALL_REFLECTANCE.status;
     return o;
   }
 
@@ -82,6 +88,8 @@
       else if (d.key === 'acGapR' || d.key === 'railX0') { if (v < 0) msgs.push(d.label + ' must be ≥ 0.'); }
       else if (v <= 0) msgs.push(d.label + ' must be greater than 0.');
     });
+    if (typeof p.wallReflectance !== 'number' || !isFinite(p.wallReflectance) ||
+        p.wallReflectance < 0 || p.wallReflectance > 1) msgs.push('Wall reflectance (wallReflectance) must be between 0 and 1.');
     if (!numeric) return msgs;
 
     if (!(p.pierW < p.width / 2)) msgs.push('Pier width must be less than half the room width.');
@@ -188,6 +196,7 @@
 
   return {
     PARAMS: PARAMS,
+    WALL_REFLECTANCE: WALL_REFLECTANCE,
     PARAM_BY_KEY: PARAM_BY_KEY,
     COLORS: COLORS,
     FACE_CLASSES: FACE_CLASSES,

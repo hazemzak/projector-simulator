@@ -71,6 +71,7 @@
     let imageOnWallFrac = null;
     let greyGap = null;
     let luxInfo = null;
+    let luminanceInfo = null;
     let pxInfo = null;
     if (img) {
       const area = img.area;
@@ -84,6 +85,11 @@
       imageOnWallFrac = area > 0 && clipped.length >= 3 ? Optics.polygonArea(clipped) / area : 0;
       greyGap = room.greyTop - Math.max(img.corners.TL[2], img.corners.TR[2]);
       luxInfo = { nominal: img.luxNominal, min: img.luxMin, max: img.luxMax, corners: img.cornerLux };
+      const luminanceFactor = room.wallReflectance / Math.PI;
+      const luminanceCorners = {};
+      Object.keys(img.cornerLux).forEach(function (key) { luminanceCorners[key] = img.cornerLux[key] * luminanceFactor; });
+      luminanceInfo = { average: img.luxNominal * luminanceFactor, min: img.luxMin * luminanceFactor,
+        max: img.luxMax * luminanceFactor, corners: luminanceCorners };
       pxInfo = { avg: img.pxPerCmAvg, min: img.pxPerCmMin, max: img.pxPerCmMax, corners: img.cornerPxPerCm };
     } else {
       warn('W_NOT_FACING', 'error', 'Image does not fully reach the back wall plane.');
@@ -197,6 +203,7 @@
       greyGap: greyGap,
       throw: { axial: axial, perpendicular: L[1] },
       lux: luxInfo,
+      luminance: luminanceInfo,
       pxPerCm: pxInfo,
       keystone: keystone,
       lens: { z: L[2], dropBelowCeiling: room.ceiling - L[2] },

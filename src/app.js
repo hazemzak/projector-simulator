@@ -139,6 +139,13 @@
   }
   App.openShareFragment = openShareFragment;
 
+  function shareFailure(error) {
+    state = initial;
+    result = Analysis.analyze(state, PS.Profiles);
+    App.sharedLink = false;
+    App.shareError = 'Invalid shared link: ' + (error && error.message ? error.message : error);
+  }
+
   function boot() {
     S.sync(state, result, 'init');
     rebuildContent();
@@ -151,10 +158,28 @@
     document.body.dataset.boot = 'ok r' + root.THREE.REVISION;
     if (params.selftest && PS.SelfTest && typeof PS.SelfTest.run === 'function') PS.SelfTest.run(App);
   }
-  var fragment = /^#s=(.*)$/.exec(root.location.hash);
-  if (fragment) openShareFragment(fragment[1]).then(function (r) {
-    if (!r.ok) App.shareError = 'Invalid shared link: ' + r.error;
-    boot();
+  function loadShareAndBoot(encoded, done) {
+    return Promise.resolve().then(function () { return openShareFragment(encoded); }).then(function (r) {
+      if (!r.ok) shareFailure(r.error);
+    }, shareFailure).then(done);
+  }
+  if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('app.share-throw-boots', function () {
+    var savedState = state, savedResult = result, savedError = App.shareError, savedShared = App.sharedLink;
+    var oldDecode = PS.Share.decode, oldSync = S.sync, oldBoot = document.body.dataset.boot, calls = 0;
+    PS.Share.decode = function () { return Promise.resolve({ ok: true, state: Model.defaultState() }); };
+    S.sync = function (s, r, source) { if (source === 'share') throw new Error('simulated apply failure'); return oldSync.apply(S, arguments); };
+    return loadShareAndBoot('stub', function () { calls++; document.body.dataset.boot = 'ok simulated'; }).then(function () {
+      return { ok: calls === 1 && document.body.dataset.boot.indexOf('ok') === 0 &&
+        App.shareError.indexOf('simulated apply failure') >= 0 && state === initial,
+        detail: 'boot calls ' + calls + ', error ' + App.shareError };
+    }).catch(function (e) { return { ok: false, detail: e.message }; }).then(function (check) {
+      PS.Share.decode = oldDecode; S.sync = oldSync;
+      state = savedState; result = savedResult; App.shareError = savedError; App.sharedLink = savedShared;
+      document.body.dataset.boot = oldBoot;
+      return check;
+    });
   });
+  var fragment = /^#s=(.*)$/.exec(root.location.hash);
+  if (fragment) loadShareAndBoot(fragment[1], boot);
   else boot();
 })(window);

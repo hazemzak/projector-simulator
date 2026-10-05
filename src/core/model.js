@@ -80,6 +80,41 @@
 
   function isNum(v) { return typeof v === 'number' && isFinite(v); }
 
+  function validateProfile(cp) {
+    const errors = [];
+    if (!cp || typeof cp !== 'object') return ['profile is missing.'];
+    if (typeof cp.id !== 'string' || !cp.id) errors.push('id is missing.');
+    if (typeof cp.name !== 'string' || !cp.name) errors.push('name is missing.');
+    ['nativeW', 'nativeH', 'lumens', 'throwMin', 'throwMax', 'distMin', 'distMax'].forEach(function (k) {
+      if (!isNum(cp[k]) || cp[k] <= 0) errors.push(k + ' must be finite and greater than 0.');
+    });
+    ['nativeW', 'nativeH'].forEach(function (k) {
+      if (isNum(cp[k]) && cp[k] > 0 && cp[k] % 1 !== 0) errors.push(k + ' must be a whole number.');
+    });
+    if (isNum(cp.throwMin) && isNum(cp.throwMax) && cp.throwMax < cp.throwMin) errors.push('throwMax must be at least throwMin.');
+    if (isNum(cp.distMin) && isNum(cp.distMax) && cp.distMax < cp.distMin) errors.push('distMax must be at least distMin.');
+    ['w', 'd', 'h'].forEach(function (k) {
+      if (!cp.body || !isNum(cp.body[k]) || cp.body[k] <= 0) errors.push('body.' + k + ' must be finite and greater than 0.');
+    });
+    ['vOffset', 'hOffset', 'keystoneV', 'keystoneH'].forEach(function (k) {
+      if (!isNum(cp[k])) errors.push(k + ' must be finite.');
+    });
+    ['lensRight', 'lensUp'].forEach(function (k) {
+      if (!cp.body || !isNum(cp.body[k])) errors.push('body.' + k + ' must be finite.');
+    });
+    ['shiftV', 'shiftH', 'focalMm', 'fNumber'].forEach(function (k) {
+      if (!Array.isArray(cp[k]) || cp[k].length !== 2 || !cp[k].every(isNum)) errors.push(k + ' must have two finite numbers.');
+      else {
+        if (cp[k][1] < cp[k][0]) errors.push(k + ' maximum must be at least minimum.');
+        if ((k === 'focalMm' || k === 'fNumber') && cp[k][0] <= 0) errors.push(k + ' minimum must be greater than 0.');
+      }
+    });
+    ['keystoneV', 'keystoneH'].forEach(function (k) {
+      if (isNum(cp[k]) && (cp[k] < 0 || cp[k] >= 90)) errors.push(k + ' must be between 0 and 90 degrees.');
+    });
+    return errors;
+  }
+
   function validateState(s) {
     const errors = [];
     if (!s || typeof s !== 'object') return ['State is missing.'];
@@ -87,13 +122,10 @@
     Room.validate(s.room).forEach(function (m) { errors.push('Room: ' + m); });
     if (!Array.isArray(s.customProfiles)) errors.push('Custom profiles must be a list.');
     else s.customProfiles.forEach(function (cp, i) {
-      const label = 'Custom profile ' + (i + 1) + ': ';
-      if (!cp || typeof cp.id !== 'string' || !cp.id || typeof cp.name !== 'string' || !cp.name ||
-          ['nativeW', 'nativeH', 'lumens', 'throwMin', 'throwMax', 'distMin', 'distMax', 'vOffset', 'hOffset', 'keystoneV', 'keystoneH']
-            .some(function (k) { return !isNum(cp[k]); }) ||
-          !cp.body || ['w', 'd', 'h', 'lensRight', 'lensUp'].some(function (k) { return !isNum(cp.body[k]); }) ||
-          !['shiftV', 'shiftH', 'focalMm', 'fNumber'].every(function (k) { return Array.isArray(cp[k]) && cp[k].length === 2 && cp[k].every(isNum); }))
-        errors.push(label + 'incomplete or invalid profile.');
+      validateProfile(cp).forEach(function (m) { errors.push('Custom profile ' + (i + 1) + ': ' + m); });
+    });
+    Builtins.forEach(function (bp, i) {
+      validateProfile(bp).forEach(function (m) { errors.push('Built-in profile ' + (i + 1) + ': ' + m); });
     });
 
     const p = s.projector;
@@ -212,7 +244,8 @@
       return ['Placement is incomplete.'];
     const state = Object.assign(defaultState(), {
       projector: pl.projector, target: pl.target, calibration: pl.calibration,
-      room: pl.room, roomStatus: pl.roomStatus, obstacles: pl.obstacles, customProfiles: pl.customProfiles
+      room: Object.assign(Room.defaults(), pl.room), roomStatus: Object.assign(Room.defaultStatus(), pl.roomStatus),
+      obstacles: pl.obstacles, customProfiles: pl.customProfiles
     });
     return validateState(state);
   }
@@ -241,8 +274,8 @@
     s.customProfiles = mergeById(s.customProfiles || [], pl.customProfiles || []);
     s.calibration = Object.assign({}, s.calibration, clone(pl.calibration || {}));
     if (restoreRoom) {
-      s.room = clone(pl.room);
-      s.roomStatus = clone(pl.roomStatus);
+      s.room = Object.assign(Room.defaults(), clone(pl.room));
+      s.roomStatus = Object.assign(Room.defaultStatus(), clone(pl.roomStatus));
       s.obstacles = clone(pl.obstacles);
     }
     return s;
@@ -254,6 +287,9 @@
     Room.PARAMS.forEach(function (p) {
       if (a[p.key] !== b[p.key]) out.push({ key: p.key, a: a[p.key], b: b[p.key] });
     });
+    const aReflectance = a.wallReflectance === undefined ? Room.WALL_REFLECTANCE.def : a.wallReflectance;
+    const bReflectance = b.wallReflectance === undefined ? Room.WALL_REFLECTANCE.def : b.wallReflectance;
+    if (aReflectance !== bReflectance) out.push({ key: 'wallReflectance', a: aReflectance, b: bReflectance });
     return out;
   }
 
@@ -286,6 +322,7 @@
     effectiveProfile: effectiveProfile,
     findProfile: findProfile,
     validateState: validateState,
+    validateProfile: validateProfile,
     PRESETS: PRESETS,
     serializeProject: serializeProject,
     parseProject: parseProject,

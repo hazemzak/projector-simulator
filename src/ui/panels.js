@@ -610,7 +610,7 @@
     if (!host) return;
     var msg = h('div', { class: 'fmsg' });
     var groups = [], byGroup = {};
-    Room.PARAMS.forEach(function (p) {
+    Room.PARAMS.concat([Room.WALL_REFLECTANCE]).forEach(function (p) {
       if (!byGroup[p.group]) { byGroup[p.group] = []; groups.push(p.group); }
       byGroup[p.group].push(p);
     });
@@ -620,11 +620,15 @@
         var r = App.update(function (d) { d.room[p.key] = p.def; d.roomStatus[p.key] = p.status; }, 'panel');
         msg.textContent = r.ok ? '' : r.errors[0];
       });
-      var range = p.low === null ? 'photo range: n/a' : 'photo range ' + fmt(p.low, 3) + '–' + fmt(p.high, 3) + ' m';
+      var range = p.key === 'wallReflectance' ? 'range 0.05–0.95' :
+        p.low === null ? 'photo range: n/a' : 'photo range ' + fmt(p.low, 3) + '–' + fmt(p.high, 3) + ' m';
       var f = numField({
-        label: p.label, title: p.definition + ' — ' + range + ' (default ' + fmt(p.def, 3) + ' m)', step: 0.01, dec: 3, extra: chip,
+        label: p.label, title: p.definition + ' — ' + range + ' (default ' + fmt(p.def, 3) + (p.unit ? ' m' : '') + ')', step: 0.01, dec: p.key === 'wallReflectance' ? 2 : 3, extra: chip,
         get: function (s) { return s.room[p.key]; },
         set: function (d, v) { d.room[p.key] = v; d.roomStatus[p.key] = 'user'; },
+        validate: function (v) {
+          return p.key === 'wallReflectance' && (v < p.low || v > p.high) ? 'Must be between 0.05 and 0.95.' : null;
+        },
         onRefresh: function (s) {
           var st = (s.roomStatus || {})[p.key] || p.status;
           setChip(chip, st);
@@ -633,6 +637,11 @@
         }
       });
       f.row.classList.add('roomrow');
+      if (p.key === 'wallReflectance') {
+        f.row.classList.add('reflectance-row');
+        f.input.min = p.low; f.input.max = p.high;
+        f.input.title = p.definition + ' — range 0.05–0.95 (default 0.50)';
+      }
       return f.row;
     }
 
@@ -697,9 +706,17 @@
     rr('Throw distance', [fmt(result.throw.axial, 3) + ' m axial', fmt(result.throw.perpendicular, 3) + ' m perpendicular']);
     if (result.lux) {
       rr('Lux (nominal: lumens ÷ area)', [fmt(result.lux.nominal, 0) + ' lx average', 'corners ' + fmt(result.lux.min, 0) + ' – ' + fmt(result.lux.max, 0) + ' lx']);
+      rr('Luminance off the wall', [fmt(result.luminance.average, 2) + ' cd/m² (nits) average',
+        'corners ' + fmt(result.luminance.min, 2) + ' – ' + fmt(result.luminance.max, 2) + ' cd/m²'], 'image');
+      rr('Assumes', 'matte wall, reflectance ' + fmt(state.room.wallReflectance, 2) +
+        ' (' + ((state.roomStatus || {}).wallReflectance || 'estimate') + ')', 'image');
       rr('px/cm', [fmt(result.pxPerCm.avg, 2) + ' average', 'corners ' + fmt(result.pxPerCm.min, 2) + ' – ' + fmt(result.pxPerCm.max, 2)]);
     } else {
-      rr('Lux (nominal: lumens ÷ area)', NA); rr('px/cm', NA);
+      rr('Lux (nominal: lumens ÷ area)', NA);
+      rr('Luminance off the wall', NA, 'image');
+      rr('Assumes', 'matte wall, reflectance ' + fmt(state.room.wallReflectance, 2) +
+        ' (' + ((state.roomStatus || {}).wallReflectance || 'estimate') + ')', 'image');
+      rr('px/cm', NA);
     }
 
     sec('Keystone');
@@ -783,21 +800,6 @@
   }
 
   // ------------------------------------------------------------------ profile editor (PLAN 6.2)
-  function profileErrors(p) {
-    var m = [];
-    function pos(v) { return typeof v === 'number' && isFinite(v) && v > 0; }
-    if (!(pos(p.nativeW) && pos(p.nativeH) && p.nativeW % 1 === 0 && p.nativeH % 1 === 0)) m.push('Pixels must be whole numbers above 0.');
-    if (!pos(p.lumens)) m.push('Lumens must be above 0.');
-    if (!pos(p.throwMin) || !(p.throwMin <= p.throwMax)) m.push('Throw ratio: min must be above 0 and not above max.');
-    if (!pos(p.distMin) || !(p.distMin <= p.distMax)) m.push('Distance: min must be above 0 and not above max.');
-    if (!(pos(p.focalMm[0]) && p.focalMm[0] <= p.focalMm[1])) m.push('Focal length: min must be above 0 and not above max.');
-    if (!(pos(p.fNumber[0]) && p.fNumber[0] <= p.fNumber[1])) m.push('F-number: min must be above 0 and not above max.');
-    if (!(p.shiftV[0] <= p.shiftV[1]) || !(p.shiftH[0] <= p.shiftH[1])) m.push('Lens shift: min must not be above max.');
-    if (!(p.keystoneV >= 0 && p.keystoneV < 90 && p.keystoneH >= 0 && p.keystoneH < 90)) m.push('Keystone limits must be between 0° and 90°.');
-    if (!(pos(p.body.w) && pos(p.body.d) && pos(p.body.h))) m.push('Body width, depth and height must be above 0.');
-    return m.length ? m[0] : null;
-  }
-
   function openProfileEditor() {
     var sel = App.state.projector.profileId;
     var reg = [], unsub = null, sig = '';
@@ -819,7 +821,7 @@
         validate: function (v, s) {
           var p = clone(profileById(s, sel));
           setPath(p, path, v);
-          return profileErrors(p);
+          return Model.validateProfile(p)[0] || null;
         }
       }).row;
     }
@@ -1152,6 +1154,18 @@
     App.on('change', function (e) { refreshAll(e.state, e.result); });
     refreshAll(App.state, App.result);
     if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('panels.mobile-layout', mobileLayoutCheck);
+    if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('panels.wall-reflectance-phone', function () {
+      if (root.innerWidth > 820) return { ok: true, detail: 'phone layout skipped' };
+      var row = document.querySelector('#panel-room .reflectance-row');
+      if (!row) return { ok: false, detail: 'wall reflectance field missing' };
+      var probe = h('div', { style: 'position:absolute;left:-10000px;top:0;width:288px' });
+      var copy = row.cloneNode(true);
+      probe.appendChild(copy); document.body.appendChild(probe);
+      var height = copy.querySelector('input').getBoundingClientRect().height;
+      var overflow = copy.scrollWidth > copy.clientWidth || document.documentElement.scrollWidth > root.innerWidth;
+      probe.remove();
+      return { ok: height >= 44 && !overflow, detail: '320px field height ' + height + ', overflow ' + overflow };
+    });
     if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('layout.construction', constructionCheck);
     if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('layout.construction-phone', constructionPhoneCheck);
   }
