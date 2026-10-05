@@ -69,6 +69,8 @@
   var App = {
     params: params,
     nostore: !!params.nostore,
+    sharedLink: false,
+    shareError: '',
 
     // state
     update: function (fn, source) {
@@ -126,16 +128,33 @@
   PS.App = App;
 
   // ------------------------------------------------------------------ boot
-  S.sync(state, result, 'init');
-  rebuildContent();
-  App.setView(Model && PS.Scene.VIEWS.indexOf(params.view) >= 0 ? params.view : 'persp');
+  function openShareFragment(fragment) {
+    return PS.Share.decode(fragment).then(function (decoded) {
+      if (!decoded.ok) return { ok: false, error: decoded.error };
+      var applied = apply(decoded.state, 'share');
+      if (!applied.ok) return { ok: false, error: applied.errors.join(' ') };
+      App.sharedLink = true;
+      return { ok: true };
+    });
+  }
+  App.openShareFragment = openShareFragment;
 
-  ['Panels', 'Manip', 'Storage', 'Export'].forEach(function (name) {
-    if (PS[name] && typeof PS[name].init === 'function') PS[name].init(App);
+  function boot() {
+    S.sync(state, result, 'init');
+    rebuildContent();
+    App.setView(Model && PS.Scene.VIEWS.indexOf(params.view) >= 0 ? params.view : 'persp');
+    ['Panels', 'Manip', 'Storage', 'Export'].forEach(function (name) {
+      if (PS[name] && typeof PS[name].init === 'function') PS[name].init(App);
+    });
+    emit('change', { state: state, result: result, source: 'init' });
+    S.renderNow();
+    document.body.dataset.boot = 'ok r' + root.THREE.REVISION;
+    if (params.selftest && PS.SelfTest && typeof PS.SelfTest.run === 'function') PS.SelfTest.run(App);
+  }
+  var fragment = /^#s=(.*)$/.exec(root.location.hash);
+  if (fragment) openShareFragment(fragment[1]).then(function (r) {
+    if (!r.ok) App.shareError = 'Invalid shared link: ' + r.error;
+    boot();
   });
-  emit('change', { state: state, result: result, source: 'init' });
-  S.renderNow();
-  document.body.dataset.boot = 'ok r' + root.THREE.REVISION;
-
-  if (params.selftest && PS.SelfTest && typeof PS.SelfTest.run === 'function') PS.SelfTest.run(App);
+  else boot();
 })(window);

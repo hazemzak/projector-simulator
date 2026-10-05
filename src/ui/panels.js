@@ -860,7 +860,12 @@
         if (r.ok) { sel = id; render(); }
       });
       var del = button('Delete', function () {
-        if (!custom || !root.confirm('Delete this custom profile?')) return;
+        if (!custom) return;
+        if (PS.Storage && PS.Storage.list().some(function (pl) { return pl.projector.profileId === sel; })) {
+          root.alert('This profile is used by a saved placement. Delete that placement first.');
+          return;
+        }
+        if (!root.confirm('Delete this custom profile?')) return;
         var gone = sel;
         sel = Model.DEFAULT_PROFILE_ID;
         App.update(function (d) {

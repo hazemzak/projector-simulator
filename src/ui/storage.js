@@ -69,11 +69,12 @@
     if (!raw) return memory;
     try {
       var list = JSON.parse(raw);
-      return Array.isArray(list) ? list : [];
+      return Array.isArray(list) ? Model.filterPlacements(list) : [];
     } catch (e) { return []; }
   }
 
   function writePlacements(list) {
+    list = Model.filterPlacements(list);
     memory = list;
     if (nostore()) return true;
     if (!list.length) { lsRemove(KEY_PLACEMENTS); return true; }
@@ -197,26 +198,28 @@
     changed();
     var msg = 'Imported ' + merged.added + ' placement' + (merged.added === 1 ? '' : 's') +
       (merged.copies ? ' (' + merged.copies + ' renamed "' + IMPORTED.trim() + '")' : '') +
-      '; room ' + (replaceRoom ? 'replaced' : 'kept') + '.';
-    return { ok: true, message: msg, added: merged.added, copies: merged.copies };
+      '; room ' + (replaceRoom ? 'replaced' : 'kept') + '.' +
+      (parsed.skipped ? ' Skipped ' + parsed.skipped + ' invalid placement' + (parsed.skipped === 1 ? '' : 's') + '.' : '');
+    return { ok: true, message: msg, added: merged.added, copies: merged.copies, skipped: parsed.skipped };
   }
 
   // ------------------------------------------------------------------ autosave
   function flushAutosave() {
     if (autosaveTimer) { root.clearTimeout(autosaveTimer); autosaveTimer = 0; }
-    if (nostore() || !App) return false;
+    if (nostore() || !App || App.sharedLink) return false;
     return lsSet(KEY_STATE, JSON.stringify(App.state));
   }
 
   function scheduleAutosave(source) {
-    if (nostore() || source === 'init' || source === 'restore' || source === 'selftest') return;
+    if (nostore() || source === 'init' || source === 'restore' || source === 'selftest' || source === 'share') return;
+    App.sharedLink = false;
     if (autosaveTimer) root.clearTimeout(autosaveTimer);
     autosaveTimer = root.setTimeout(flushAutosave, AUTOSAVE_MS);
   }
 
   // Restore the last autosaved state at start-up (not when a preset is requested in the URL).
   function restoreAutosave() {
-    if (nostore() || (App.params && App.params.preset)) return null;
+    if (nostore() || App.sharedLink || (App.params && App.params.preset)) return null;
     var raw = lsGet(KEY_STATE);
     if (!raw) return null;
     try {
@@ -267,6 +270,9 @@
       '.ps6-actions{display:flex;flex-wrap:wrap;gap:4px}',
       '.ps6-status{min-height:1.4em;margin-top:4px;font-size:12px;color:var(--ok)}',
       '.ps6-status.ps6-err{color:var(--err)}',
+      '.ps6-share-notice{position:fixed;z-index:30;top:48px;right:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:calc(100vw - 16px);padding:4px 8px;border:1px solid var(--edge);border-radius:2px;background:var(--panel);color:var(--info);overflow-wrap:anywhere}',
+      '.ps6-share-notice .ps6-btn{min-height:44px}',
+      '.ps6-share-btn{min-height:44px}',
       '.ps6-rename{box-sizing:border-box;height:24px;flex:1 1 auto;min-width:0;padding:0 8px;border:1px solid var(--accent);border-radius:2px;background:var(--field);color:var(--text);font:inherit}',
       '.ps6-modal{color:var(--text)}',
       '.ps6-modal h3{margin:0 0 8px;font-size:15px}',
@@ -411,6 +417,14 @@
     injectStyle();
     panel.textContent = '';
     panel.appendChild(el('h2', {}, 'Placements'));
+    if (App.sharedLink || App.shareError) {
+      var notice = el('div', { 'class': 'ps6-share-notice', role: 'status' }, App.sharedLink ? 'Opened from a shared link' : App.shareError);
+      if (App.sharedLink) notice.appendChild(button('Reset to default', '', function () {
+        var r = App.replaceState(Model.defaultState(), 'panel');
+        if (r.ok) { root.history.replaceState(null, '', root.location.pathname + root.location.search); notice.remove(); }
+      }));
+      panel.appendChild(notice);
+    }
 
     var save_ = el('div', { 'class': 'ps6-save' });
     ui.name = el('input', { type: 'text', placeholder: 'Placement name', 'aria-label': 'Placement name', maxlength: '80' });
@@ -426,6 +440,7 @@
 
     var actions = el('div', { 'class': 'ps6-actions' });
     actions.appendChild(button('Export project JSON', '', function () { setStatus('Saved ' + exportProject() + ' to your downloads.'); }));
+    actions.appendChild(button('Copy share link', 'ps6-share-btn', copyShareLink));
     ui.file = el('input', { type: 'file', accept: '.json,application/json', style: 'display:none' });
     ui.file.addEventListener('change', function () { onImportFile(ui.file.files[0]); ui.file.value = ''; });
     actions.appendChild(button('Import JSON', '', function () { ui.file.click(); }));
@@ -460,6 +475,20 @@
     }, function (e) { setStatus('Could not copy: ' + e.message, true); });
   }
 
+  function copyShareLink() {
+    return PS.Share.encode(App.state).then(function (encoded) {
+      if (encoded.length > 6000) { setStatus('Share link exceeds 6,000 characters. Use Export project JSON instead.', true); return; }
+      var url = root.location.href.split('#')[0] + '#s=' + encoded;
+      if (root.navigator.clipboard && root.navigator.clipboard.writeText) return root.navigator.clipboard.writeText(url).then(function () {
+        setStatus('Share link copied. A user-loaded picture is not included; reload it after opening.');
+      });
+      var field = el('textarea'); field.value = url; field.style.position = 'fixed'; field.style.opacity = '0';
+      document.body.appendChild(field); field.select();
+      var copied = document.execCommand('copy'); field.remove();
+      setStatus(copied ? 'Share link copied. A user-loaded picture is not included; reload it after opening.' : 'Could not copy the link. Use Export project JSON instead.', !copied);
+    }).catch(function (e) { setStatus('Could not make share link: ' + e.message, true); });
+  }
+
   // ------------------------------------------------------------------ self test
   function deepEqual(a, b) {
     if (a === b) return true;
@@ -477,6 +506,28 @@
   function registerChecks() {
     var reg = PS.SelfTest && PS.SelfTest.register;
     var checks = [
+      ['storage.import-skips-broken-placement', function (A) {
+        var before = clone(A.state), good = Model.makePlacement(before, 'valid import');
+        var text = Model.serializeProject(before, [good, { id: 'broken', projector: {} }]);
+        var r = importText(text, { replaceRoom: false });
+        var rendered = !!ui.list.querySelector('li') && ui.list.textContent.indexOf('valid import') >= 0;
+        var responds = A.update(function (d) { d.projector.yawDeg += 1; }, 'selftest').ok;
+        remove(good.id); A.replaceState(before, 'selftest');
+        return { ok: r.ok && r.skipped === 1 && rendered && responds, detail: 'skipped=' + r.skipped + ', list renders=' + rendered + ', update=' + responds };
+      }],
+      ['storage.share-fragment-no-write', function (A) {
+        var before = clone(A.state), target = Model.PRESETS.yaw10.patch(Model.defaultState());
+        var proto = root.Storage.prototype, original = proto.setItem, writes = [];
+        return PS.Share.encode(target).then(function (encoded) {
+          proto.setItem = function (key, value) { if (String(key).indexOf('projsim.') === 0) writes.push(key); return original.call(this, key, value); };
+          return A.openShareFragment(encoded).then(function (opened) {
+            var ok = opened.ok && A.state.projector.yawDeg === 10 && writes.length === 0;
+            proto.setItem = original;
+            A.sharedLink = false; A.replaceState(before, 'selftest');
+            return { ok: ok, detail: 'yaw=' + target.projector.yawDeg + ', writes=' + writes.length };
+          }, function (e) { proto.setItem = original; throw e; });
+        });
+      }],
       ['storage.save-change-load', function (A) {
         var before = clone(A.state), n0 = list().length;
         var pl = save('selftest placement', 'p6');

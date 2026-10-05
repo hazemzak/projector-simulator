@@ -1,8 +1,8 @@
 /* State schema, defaults, presets, profile merge, (de)serialisation (PLAN.md §4). Pure: no THREE, no DOM. */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./room.js'));
-  else { root.PS = root.PS || {}; root.PS.Model = factory(root.PS.Room); }
-})(typeof self !== 'undefined' ? self : this, function (Room) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./room.js'), require('../../data/projectors.js'));
+  else { root.PS = root.PS || {}; root.PS.Model = factory(root.PS.Room, root.PS.Profiles); }
+})(typeof self !== 'undefined' ? self : this, function (Room, Builtins) {
   'use strict';
 
   const SCHEMA = 'projsim/1';
@@ -57,7 +57,7 @@
   function findProfile(state, builtins) {
     const id = state.projector.profileId;
     const all = (state.customProfiles || []).concat(builtins || []);
-    for (let i = 0; i < all.length; i++) if (all[i].id === id) return all[i];
+    for (let i = 0; i < all.length; i++) if (all[i] && all[i].id === id) return all[i];
     return null;
   }
 
@@ -67,11 +67,14 @@
     if (!base) return null;
     const p = clone(base);
     const cal = (state.calibration || {})[base.id];
-    if (cal) {
-      ['vOffset', 'vOffsetStatus', 'hOffset', 'hOffsetStatus'].forEach(function (k) {
-        if (cal[k] !== undefined && cal[k] !== null) p[k] = cal[k];
-      });
-    }
+    if (cal) ['vOffset', 'hOffset'].forEach(function (key) {
+      const status = key + 'Status';
+      if (isNum(cal[key])) p[key] = cal[key];
+      if (cal[status] !== undefined) p[status] = cal[status] === 'measured' && !isNum(cal[key]) ? 'provisional' : cal[status];
+    });
+    ['vOffset', 'hOffset'].forEach(function (key) {
+      if (!isNum(p[key])) { p[key] = 0; p[key + 'Status'] = 'provisional'; }
+    });
     return p;
   }
 
@@ -82,11 +85,22 @@
     if (!s || typeof s !== 'object') return ['State is missing.'];
     if (s.schema !== SCHEMA) errors.push('Unknown schema "' + s.schema + '".');
     Room.validate(s.room).forEach(function (m) { errors.push('Room: ' + m); });
+    if (!Array.isArray(s.customProfiles)) errors.push('Custom profiles must be a list.');
+    else s.customProfiles.forEach(function (cp, i) {
+      const label = 'Custom profile ' + (i + 1) + ': ';
+      if (!cp || typeof cp.id !== 'string' || !cp.id || typeof cp.name !== 'string' || !cp.name ||
+          ['nativeW', 'nativeH', 'lumens', 'throwMin', 'throwMax', 'distMin', 'distMax', 'vOffset', 'hOffset', 'keystoneV', 'keystoneH']
+            .some(function (k) { return !isNum(cp[k]); }) ||
+          !cp.body || ['w', 'd', 'h', 'lensRight', 'lensUp'].some(function (k) { return !isNum(cp.body[k]); }) ||
+          !['shiftV', 'shiftH', 'focalMm', 'fNumber'].every(function (k) { return Array.isArray(cp[k]) && cp[k].length === 2 && cp[k].every(isNum); }))
+        errors.push(label + 'incomplete or invalid profile.');
+    });
 
     const p = s.projector;
     if (!p || typeof p !== 'object') errors.push('Projector is missing.');
     else {
       if (typeof p.profileId !== 'string' || !p.profileId) errors.push('Projector: profileId is missing.');
+      else if (!findProfile(s, Builtins)) errors.push('Projector: unknown profile "' + p.profileId + '".');
       const lens = p.lens || {};
       ['x', 'y', 'z'].forEach(function (k) { if (!isNum(lens[k])) errors.push('Projector: lens.' + k + ' must be a number.'); });
       ['yawDeg', 'pitchDeg', 'rollDeg', 'shiftV', 'shiftH'].forEach(function (k) {
@@ -179,6 +193,32 @@
     };
   }
 
+  function validatePlacement(pl) {
+    if (!pl || typeof pl !== 'object' || Array.isArray(pl) ||
+        typeof pl.id !== 'string' || !pl.id || typeof pl.name !== 'string' ||
+        typeof pl.note !== 'string' || typeof pl.savedAt !== 'string' || !isFinite(Date.parse(pl.savedAt)))
+      return ['Placement metadata is incomplete.'];
+    const fields = ['projector', 'target', 'calibration', 'room', 'roomStatus', 'obstacles', 'customProfiles'];
+    if (fields.some(function (k) { return !Object.prototype.hasOwnProperty.call(pl, k); }))
+      return ['Placement is incomplete.'];
+    if (!pl.projector || !pl.target || !pl.room || !pl.roomStatus ||
+        !pl.calibration || typeof pl.calibration !== 'object' || Array.isArray(pl.calibration) ||
+        !Array.isArray(pl.obstacles) || !Array.isArray(pl.customProfiles) ||
+        Room.PARAMS.some(function (p) { return !Object.prototype.hasOwnProperty.call(pl.room, p.key) ||
+          !Object.prototype.hasOwnProperty.call(pl.roomStatus, p.key); }) ||
+        !['enabled', 'x0', 'x1', 'z0', 'z1'].every(function (k) { return Object.prototype.hasOwnProperty.call(pl.target, k); }) ||
+        !['profileId', 'lens', 'yawDeg', 'pitchDeg', 'rollDeg', 'throwRatio', 'mount', 'shiftV', 'shiftH']
+          .every(function (k) { return Object.prototype.hasOwnProperty.call(pl.projector, k); }))
+      return ['Placement is incomplete.'];
+    const state = Object.assign(defaultState(), {
+      projector: pl.projector, target: pl.target, calibration: pl.calibration,
+      room: pl.room, roomStatus: pl.roomStatus, obstacles: pl.obstacles, customProfiles: pl.customProfiles
+    });
+    return validateState(state);
+  }
+
+  function filterPlacements(list) { return list.filter(function (pl) { return !validatePlacement(pl).length; }); }
+
   function mergeById(current, incoming) {
     const out = clone(current);
     clone(incoming).forEach(function (p) {
@@ -192,6 +232,8 @@
   // (calibration and custom profiles are merged by profile id, so profiles not in the placement survive).
   // Room, room status and obstacles come from the placement only when restoreRoom is true.
   function applyPlacement(state, pl, opts) {
+    const errors = validatePlacement(pl);
+    if (errors.length) throw new Error('Invalid placement: ' + errors.join(' '));
     const restoreRoom = !!(opts && opts.restoreRoom);
     const s = clone(state);
     s.projector = clone(pl.projector);
@@ -233,7 +275,8 @@
     if (errors.length) throw new Error('Invalid state: ' + errors.join(' '));
     const placements = o.placements === undefined ? [] : o.placements;
     if (!Array.isArray(placements)) throw new Error('Placements must be a list.');
-    return { state: state, placements: placements };
+    const valid = filterPlacements(placements);
+    return { state: state, placements: valid, skipped: placements.length - valid.length };
   }
 
   return {
@@ -247,6 +290,8 @@
     serializeProject: serializeProject,
     parseProject: parseProject,
     makePlacement: makePlacement,
+    validatePlacement: validatePlacement,
+    filterPlacements: filterPlacements,
     applyPlacement: applyPlacement,
     diffRoom: diffRoom
   };
