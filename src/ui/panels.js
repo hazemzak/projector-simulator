@@ -69,7 +69,9 @@
   // o: {label, get(state, result), set(draft, v), step, dec, unit, title, validate(v, state)->message|null,
   //     extra (element after the input), onRefresh(state, result), msgEl, disabled, reg}
   function numField(o) {
-    var input = h('input', { type: 'number', step: o.step, class: 'num', 'aria-label': o.aria || o.label || '' });
+    var touchField = root.getComputedStyle(document.documentElement).getPropertyValue('--mobile-layout').trim() === '1';
+    var input = h('input', { type: touchField ? 'text' : 'number', inputmode: 'decimal', step: o.step, class: 'num', 'aria-label': o.aria || o.label || '' });
+    input.addEventListener('pointerdown', function (event) { if (event.pointerType === 'touch') input.type = 'text'; });
     if (o.disabled) input.disabled = true;
     if (o.title) input.title = o.title;
     var msg = o.msgEl || h('div', { class: 'fmsg' });
@@ -80,7 +82,7 @@
       msg.textContent = text || '';
     }
     function apply() {
-      var raw = input.value.trim(), v = parseFloat(raw);
+      var raw = input.value.trim().replace(',', '.'), v = Number(raw);
       if (raw === '' || !isFinite(v)) { setInvalid('Enter a number.'); return false; }
       if (o.validate) { var m = o.validate(v, App.state); if (m) { setInvalid(m); return false; } }
       var cur = o.get(App.state, App.result);
@@ -108,10 +110,23 @@
     }
     var row = null;
     if (!o.msgEl || o.label) {
-      row = h('div', { class: 'frow' + (o.mid ? ' srow' : '') }, [
+      var field = input;
+      if (o.pose) {
+        function stepBy(direction) {
+          var current = o.get(App.state, App.result);
+          input.value = fmt(Math.round((current + direction * o.pose) * 1000) / 1000, o.dec);
+          input.dispatchEvent(new root.Event('change', { bubbles: true }));
+        }
+        field = h('span', { class: 'pose-stepper' }, [
+          h('button', { type: 'button', class: 'pose-step', text: '−', 'aria-label': 'Decrease ' + (o.aria || o.label), onclick: function () { stepBy(-1); } }),
+          input,
+          h('button', { type: 'button', class: 'pose-step', text: '+', 'aria-label': 'Increase ' + (o.aria || o.label), onclick: function () { stepBy(1); } })
+        ]);
+      }
+      row = h('div', { class: 'frow' + (o.mid ? ' srow' : '') + (o.pose ? ' pose-row' : '') }, [
         h('label', { class: 'flabel', text: o.label || '', title: o.title }),
         o.mid,
-        input,
+        field,
         o.extra || h('span', { class: 'unit', text: o.unit || '' }),
         o.msgEl ? null : msg
       ]);
@@ -327,14 +342,14 @@
 
     function pos(label, axis) {
       return numField({
-        label: label, step: 0.01, dec: 3, unit: 'm', aria: 'Lens ' + axis,
+        label: label, step: 0.01, pose: 0.01, dec: 3, unit: 'm', aria: 'Lens ' + axis,
         get: function (s) { return s.projector.lens[axis]; },
         set: function (d, v) { d.projector.lens[axis] = v; }
       }).row;
     }
     function ang(label, key, range) {
       return numField({
-        label: label, step: 0.5, dec: 1, unit: '°',
+        label: label, step: 0.5, pose: 1, dec: 1, unit: '°',
         get: function (s) { return s.projector[key]; },
         set: function (d, v) { d.projector[key] = v; },
         validate: range ? function (v) { return Math.abs(v) > range ? 'Must be between −' + range + '° and ' + range + '°.' : null; } : null
@@ -898,6 +913,88 @@
   }
 
   // ------------------------------------------------------------------ init
+  function buildMobileTabs() {
+    var nav = $('mobile-tabs');
+    if (!nav) return;
+    [['setup', 'Setup'], ['results', 'Results'], ['save', 'Save']].forEach(function (item) {
+      var tab = h('button', { type: 'button', class: 'mobile-tab', text: item[1], 'aria-selected': item[0] === 'setup' ? 'true' : 'false' });
+      tab.dataset.tab = item[0];
+      tab.addEventListener('click', function () { selectMobileTab(item[0]); });
+      nav.appendChild(tab);
+    });
+    document.body.dataset.mobileTab = 'setup';
+    refreshers.push(function (state, result) {
+      nav.querySelector('[data-tab="results"]').textContent = 'Results (' + result.warnings.length + ')';
+    });
+  }
+
+  function selectMobileTab(name) {
+    document.body.dataset.mobileTab = name;
+    var nav = $('mobile-tabs');
+    if (!nav) return;
+    Array.prototype.forEach.call(nav.children, function (tab) {
+      tab.setAttribute('aria-selected', String(tab.dataset.tab === name));
+    });
+  }
+
+  function touchHints() {
+    var timer;
+    document.addEventListener('click', function (event) {
+      if (!root.matchMedia('(hover: none)').matches || event.target.closest('button')) return;
+      var target = event.target.closest('.chip[title], .flabel[title], .rm');
+      if (!target) return;
+      var message = target.title;
+      if (!message && target.classList.contains('rm')) {
+        message = '† depends on the vertical offset; ‡ depends on unmeasured room values. See the notes below the readouts.';
+      }
+      if (!message) return;
+      var hint = $('touch-hint');
+      if (!hint) { hint = h('div', { id: 'touch-hint', role: 'status' }); document.body.appendChild(hint); }
+      hint.textContent = message;
+      clearTimeout(timer);
+      timer = setTimeout(function () { hint.remove(); }, 4500);
+    });
+  }
+
+  function mobileLayoutCheck() {
+    if (root.innerWidth > 820) return { ok: true, detail: 'skipped: wide viewport' };
+    var host = $('canvas-host'), bad = [];
+    var rect = host.getBoundingClientRect();
+    var edge = Math.min(root.innerWidth, root.visualViewport ? root.visualViewport.width : root.innerWidth);
+    function clipped(el, name) {
+      var r = el.getBoundingClientRect();
+      if (r.width && (r.left < -1 || r.right > edge + 1)) bad.push(name + ' clipped');
+    }
+    if (rect.width < 300 || rect.height < 300) bad.push('canvas host under 300px');
+    if (document.documentElement.scrollWidth > root.innerWidth) bad.push('horizontal scroll');
+    clipped($('banner'), 'banner');
+    clipped($('provenance'), 'provisional notice');
+    clipped($('help-btn'), 'Help');
+    Array.prototype.forEach.call($('viewbar').querySelectorAll('button'), function (button) { clipped(button, 'view button'); });
+    var tabs = Array.prototype.slice.call($('mobile-tabs').querySelectorAll('button'));
+    if (tabs.length !== 3 || tabs.map(function (tab) { return tab.textContent.split(' ')[0]; }).join(',') !== 'Setup,Results,Save') bad.push('tabs missing');
+    tabs.forEach(function (tab) { clipped(tab, 'tab ' + tab.textContent); });
+    var initial = document.body.dataset.mobileTab;
+    [['setup', ['projector', 'display', 'target', 'obstacles', 'room']],
+      ['results', ['warnings', 'readouts']], ['save', ['placements']]].forEach(function (group) {
+      selectMobileTab(group[0]);
+      group[1].forEach(function (name) {
+        var panel = $('panel-' + name);
+        if (!panel || !panel.getBoundingClientRect().width || root.getComputedStyle(panel).display === 'none') bad.push(name + ' hidden');
+        if (rect.top >= panel.getBoundingClientRect().top) bad.push(name + ' above canvas');
+        var details = Array.prototype.slice.call(panel.querySelectorAll('details'));
+        var opened = details.map(function (d) { return d.open; });
+        details.forEach(function (d) { d.open = true; });
+        Array.prototype.forEach.call(panel.querySelectorAll('input'), function (input) { clipped(input, name + ' input'); });
+        Array.prototype.forEach.call(panel.querySelectorAll('button, select'), function (control) { clipped(control, name + ' control'); });
+        if (document.documentElement.scrollWidth > root.innerWidth) bad.push(name + ' horizontal scroll');
+        details.forEach(function (d, i) { d.open = opened[i]; });
+      });
+    });
+    selectMobileTab(initial);
+    return { ok: !bad.length, detail: bad.length ? bad.join('; ') : 'view first; panels and fields fit' };
+  }
+
   function init(app) {
     App = app;
     refreshers = [];
@@ -909,6 +1006,8 @@
     buildRoom();
     buildReadouts();
     buildWarnings();
+    buildMobileTabs();
+    touchHints();
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && $('modal-host') && $('modal-host').firstChild) closeModal();
     });
@@ -916,6 +1015,7 @@
     if (host) host.addEventListener('mousedown', function (e) { if (e.target === host) closeModal(); });
     App.on('change', function (e) { refreshAll(e.state, e.result); });
     refreshAll(App.state, App.result);
+    if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('panels.mobile-layout', mobileLayoutCheck);
   }
 
   function refreshAll(state, result) {

@@ -94,7 +94,7 @@
     st.textContent =
       '#viewbar{align-items:center}' +
       '#viewbar .vb{padding:3px 9px;border:1px solid #aeb5bf;border-radius:3px;background:#f1f3f6;color:#1d2026;cursor:pointer}' +
-      '#viewbar .vb:hover{background:#e4e8ed}' +
+      '@media(hover:hover){#viewbar .vb:hover{background:#e4e8ed}}' +
       '#viewbar .vb[aria-pressed="true"]{background:#1f6fb4;border-color:#17588f;color:#fff}' +
       '#viewbar .vb-sep{width:1px;align-self:stretch;margin:2px 6px;background:#b9c0ca}' +
       '#viewbar .vb-hint{margin-left:auto;font-size:12px;color:#5b6572}' +
@@ -198,7 +198,12 @@
     pivot = App.projectorPivot;
 
     controls = new THREE.TransformControls(App.cameras.persp, App.domElement);
-    controls.setSize(0.8);
+    function sizeForViewport() {
+      controls.setSize(parseFloat(root.getComputedStyle(document.documentElement).getPropertyValue('--gizmo-size')) || 0.8);
+      App.requestRender();
+    }
+    sizeForViewport();
+    root.addEventListener('resize', sizeForViewport);
     controls.setMode('translate');
     controls.setSpace('world');
     controls.addEventListener('objectChange', onObjectChange);
