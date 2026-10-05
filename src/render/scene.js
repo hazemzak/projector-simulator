@@ -197,9 +197,9 @@
       var tw = g.measureText(text).width;
       if (tw > 960) g.font = 'bold ' + Math.floor(64 * 960 / tw) + 'px "Segoe UI", Arial, sans-serif';
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.lineWidth = 8; g.strokeStyle = '#421400D9';
+      g.lineWidth = 8; g.strokeStyle = '#0D0C0ED9';
       g.strokeText(text, 512, 66);
-      g.fillStyle = '#DE9373';
+      g.fillStyle = '#C9C2CC';
       g.fillText(text, 512, 66);
       var t = new THREE.CanvasTexture(c);
       t.colorSpace = THREE.SRGBColorSpace;
@@ -287,7 +287,7 @@
       lens.rotation.x = Math.PI / 2;
       lens.position.set(0, 0, -0.015);
       bodyGroup.add(lens);
-      var dot = new THREE.Mesh(new THREE.CircleGeometry(0.02, 24), new THREE.MeshBasicMaterial({ color: 0xDEDA73, side: THREE.DoubleSide }));
+      var dot = new THREE.Mesh(new THREE.CircleGeometry(0.02, 24), new THREE.MeshBasicMaterial({ color: 0xC9C2CC, side: THREE.DoubleSide }));
       dot.userData.ownMaterial = true;
       dot.rotation.y = Math.PI;
       dot.position.set(0, 0, -0.031);
@@ -299,7 +299,7 @@
 
     var beamGeo = new THREE.BufferGeometry();
     beamGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24), 3));
-    var beamLines = new THREE.LineSegments(beamGeo, lineMaterial(0xDEDA73));
+    var beamLines = new THREE.LineSegments(beamGeo, lineMaterial(0xC9C2CC));
     beamLines.frustumCulled = false;
     helperGroup.add(beamLines);
 
@@ -356,7 +356,7 @@
       beamLines.visible = !!state.display.showFrustum;
 
       var t = state.target;
-      targetOutline = replaceHelper(targetOutline, t && t.enabled ? dashedRect(t, 0x73DED5) : null);
+      targetOutline = replaceHelper(targetOutline, t && t.enabled ? dashedRect(t, 0xC373DE) : null);
       var pv = result.preview;
       previewOutline = replaceHelper(previewOutline,
         state.display.keystoneSim && pv && pv.available ? dashedRect(pv.rect, 0xDE73BA) : null);

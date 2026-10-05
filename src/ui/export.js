@@ -79,7 +79,7 @@
   function summaryText() { return summaryLines().join('\n') + '\n'; }
 
   // ------------------------------------------------------------------ images
-  var KIND_COLOUR = { title: '#330044', text: '#252027', error: '#B81E85', warn: '#B84C1E', info: '#1E45B8', honesty: '#421400' };
+  var KIND_COLOUR = { title: '#252027', text: '#252027', error: '#504653', warn: '#504653', info: '#504653', honesty: '#504653' };
 
   function drawFitted(g, text, x, y, maxW, bold) {
     var size = FONT_PX;
@@ -126,7 +126,7 @@
 
     g.fillStyle = '#FFFFFF';
     g.fillRect(0, base.height, out.width, FOOTER_H);
-    g.fillStyle = '#330044';
+    g.fillStyle = '#252027';
     g.fillRect(0, base.height, out.width, 4);
     g.textBaseline = 'alphabetic';
     var y = base.height + 36;
