@@ -241,7 +241,7 @@
     provisional: ['PROV', 'chip-prov', 'Provisional (not photographed)'],
     assumed: ['ASSUMED', 'chip-assumed', 'Assumed (typical value, not seen)'],
     user: ['USER', 'chip-user', 'Edited by you'],
-    measured: ['MEASURED', 'chip-user', 'Measured by you']
+    measured: ['MEASURED', 'chip-measured', 'Measured by you']
   };
   function setChip(el, status) {
     var c = CHIP[status] || CHIP.assumed;
@@ -995,6 +995,137 @@
     return { ok: !bad.length, detail: bad.length ? bad.join('; ') : 'view first; panels and fields fit' };
   }
 
+  function constructionSetup() {
+    var saved = { state: JSON.parse(JSON.stringify(App.state)), view: App.getView() };
+    App.replaceState(PS.Model.defaultState(), 'selftest');
+    App.setView('persp'); App.resetCamera(); App.renderNow();
+    [$('col-left'), $('col-right'), document.scrollingElement].forEach(function (el) {
+      if (el) { el.scrollTop = 0; el.scrollLeft = 0; }
+    });
+    return saved;
+  }
+
+  function constructionRestore(saved) {
+    App.replaceState(saved.state, 'selftest');
+    App.setView(saved.view);
+  }
+
+  function constructionPoints() {
+    var c = App.result.image.corners, r = $('canvas-host').getBoundingClientRect();
+    function px(x, z) {
+      var v = new root.THREE.Vector3(x, z, 0).project(App.cameras.persp);
+      return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height];
+    }
+    var zm = (c.TL[2] + c.BL[2]) / 2;
+    return { left: px(c.TL[0], zm), right: px(c.TR[0], zm),
+      centre: px((c.TL[0] + c.TR[0]) / 2, zm),
+      corners: ['TL', 'TR', 'BR', 'BL'].map(function (name) { return [name, px(c[name][0], c[name][2])]; }) };
+  }
+
+  function constructionCheck() {
+    if (root.innerWidth !== 1600 || root.innerHeight !== 1000) return { ok: true, detail: 'skipped: inner ' + root.innerWidth + 'x' + root.innerHeight };
+    var saved = constructionSetup(), detail = [], bad = [];
+    function box(id) { return $(id).getBoundingClientRect(); }
+    function measure(name, value, expected, enforce) {
+      detail.push(name + ' ' + value.toFixed(3));
+      if (enforce && Math.abs(value - expected) > 0.5) bad.push(name + ' expected ' + expected);
+    }
+    try {
+      var banner = box('banner'), left = box('col-left'), centre = box('col-centre');
+      var right = box('col-right'), viewbar = box('viewbar'), canvas = box('canvas-host');
+      var projector = box('panel-projector'), display = box('panel-display');
+      var warnings = box('panel-warnings'), readouts = box('panel-readouts');
+      var subhead = $('panel-projector').querySelector('.subhead').getBoundingClientRect();
+      var targetHead = $('panel-target').querySelector('summary').getBoundingClientRect();
+      measure('banner bottom', banner.bottom, 40, true);
+      measure('left width', left.width, 320, true);
+      measure('centre left', centre.left, 320, true);
+      measure('centre width', centre.width, 960, true);
+      measure('right left', right.left, 1280, true);
+      measure('viewbar bottom', viewbar.bottom, 94.903, true);
+      measure('canvas top', canvas.top, 94.903, true);
+      measure('canvas height', canvas.height, 905.097, true);
+      measure('projector top', projector.top, 102.903, true);
+      measure('warnings top', warnings.top, 102.903, true);
+      measure('warnings bottom', warnings.bottom, 360, false);
+      measure('readouts top', readouts.top, 368, false);
+      measure('projector bottom', projector.bottom, 680, false);
+      measure('display top', display.top, 688, false);
+      measure('subhead top', subhead.top, 547.452, false);
+      measure('target header top', targetHead.top, 1000, false);
+      measure('target header bottom', targetHead.bottom, 1000, false);
+      if (targetHead.top >= root.innerHeight || display.bottom > root.innerHeight) bad.push('left pane first-screen visibility');
+      var p = constructionPoints();
+      measure('card mid left x', p.left[0], 640, true);
+      measure('card mid left y', p.left[1], 547.452, true);
+      measure('card mid right x', p.right[0], 960, true);
+      measure('card mid right y', p.right[1], 547.452, true);
+      measure('card centre x', p.centre[0], 800, true);
+      measure('card centre y', p.centre[1], 547.452, true);
+      var rungs = [40, 94.903, 153.360, 216.163, 284.458, 360, 445.744, 547.452, 680];
+      p.corners.forEach(function (corner) {
+        var distance = Math.min.apply(null, rungs.map(function (y) { return Math.abs(corner[1][1] - y); }));
+        detail.push(corner[0] + ' x ' + corner[1][0].toFixed(3) + ' y ' + corner[1][1].toFixed(3) + ' nearest rung distance ' + distance.toFixed(3));
+      });
+      detail.push('dropped: warning/projector heights and Calibration divider');
+    } catch (e) { bad.push('probe error ' + e.message); }
+    finally { constructionRestore(saved); }
+    return { ok: !bad.length, detail: detail.join(', ') + (bad.length ? '; failed: ' + bad.join('; ') : '') };
+  }
+
+  function constructionPhoneCheck() {
+    var prefix = 'not applied (owner ruling: usability first); measured: ';
+    if (root.innerWidth !== 390 || root.innerHeight !== 844) return { ok: true, detail: prefix + 'skipped: inner ' + root.innerWidth + 'x' + root.innerHeight };
+    var saved, detail = [];
+    function box(id) { return $(id).getBoundingClientRect(); }
+    function measure(name, value) {
+      detail.push(name + ' ' + value.toFixed(3));
+    }
+    try {
+      saved = constructionSetup();
+      var banner = box('banner'), viewbar = box('viewbar'), canvas = box('canvas-host'), tabs = box('mobile-tabs');
+      var buttons = $('viewbar').querySelectorAll('.vb');
+      var profile = $('panel-projector').querySelector('.sel').getBoundingClientRect();
+      var mount = $('panel-projector').querySelectorAll('.sel')[1].getBoundingClientRect();
+      measure('banner bottom', banner.bottom);
+      measure('viewbar bottom', viewbar.bottom);
+      measure('canvas top', canvas.top);
+      measure('canvas bottom', canvas.bottom);
+      measure('canvas width', canvas.width);
+      measure('tabs top', tabs.top);
+      measure('view 1 right', buttons[0].getBoundingClientRect().right);
+      measure('view 2 left', buttons[1].getBoundingClientRect().left);
+      measure('Snap right', buttons[7].getBoundingClientRect().right);
+      measure('Reset left', buttons[8].getBoundingClientRect().left);
+      measure('Help left', box('help-btn').left);
+      measure('Profile select left', profile.left);
+      measure('Mount select left', mount.left);
+      measure('panel visible height', tabs.top - canvas.bottom);
+      buttons.forEach(function (button, i) {
+        var rect = button.getBoundingClientRect();
+        detail.push('view button ' + (i + 1) + ' height ' + rect.height.toFixed(3));
+      });
+      var p = constructionPoints();
+      measure('card centre x', p.centre[0]);
+      measure('card centre y', p.centre[1]);
+      measure('card mid left x', p.left[0]);
+      measure('card mid left y', p.left[1]);
+      measure('card mid right x', p.right[0]);
+      measure('card mid right y', p.right[1]);
+      Array.prototype.slice.call($('panel-projector').querySelectorAll('.frow'), 0, 3).forEach(function (row, i) {
+        detail.push('projector row ' + (i + 1) + ' y ' + row.getBoundingClientRect().top.toFixed(3));
+      });
+      detail.push('dropped: phone hero construction');
+    } catch (e) { detail.push('probe error ' + e.message); }
+    finally {
+      if (saved) {
+        try { constructionRestore(saved); }
+        catch (e) { detail.push('restore error ' + e.message); }
+      }
+    }
+    return { ok: true, detail: prefix + detail.join(', ') };
+  }
+
   function init(app) {
     App = app;
     refreshers = [];
@@ -1016,6 +1147,8 @@
     App.on('change', function (e) { refreshAll(e.state, e.result); });
     refreshAll(App.state, App.result);
     if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('panels.mobile-layout', mobileLayoutCheck);
+    if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('layout.construction', constructionCheck);
+    if (PS.SelfTest && PS.SelfTest.register) PS.SelfTest.register('layout.construction-phone', constructionPhoneCheck);
   }
 
   function refreshAll(state, result) {

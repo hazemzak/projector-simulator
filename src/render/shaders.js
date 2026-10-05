@@ -151,7 +151,7 @@
     var own = {
       uAlbedo: { value: new THREE.Color(opts.albedo) },
       uAlbedoUpper: { value: new THREE.Color(opts.albedoUpper || opts.albedo) },
-      uHatchColour: { value: new THREE.Color('#e0a050') },
+      uHatchColour: { value: new THREE.Color('#DE9373') },
       uSplit: { value: opts.split ? 1 : 0 },
       uHatchMode: { value: opts.hatchMode || 0 }
     };

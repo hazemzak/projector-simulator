@@ -14,7 +14,7 @@
 
   var VIEWS = ['persp', 'top', 'wall', 'projector'];
   var MARGIN = 0.08;
-  var BG = '#2b2f36';
+  var BG = '#0D0C0E';
 
   function create(host) {
     var renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -105,8 +105,8 @@
       if (v === 'persp') {
         // Narrow hosts (portrait) get a longer pull-back so the whole room, including the hatched front, stays in frame.
         var k = (width && height) ? Math.max(1, 1.5 / (width / height)) : 1;
-        cam.position.copy(r2t([d.W / 2, d.D + 1.5 * k, 2.2 + 0.5 * (k - 1)]));
-        tgt = r2t([d.W / 2, 0, 1.3]);
+        cam.position.copy(r2t([d.W / 2, d.D + 1.75313 * k, 2.2 + 0.5 * (k - 1)]));
+        tgt = r2t([d.W / 2, 0, 1.496875]);
       } else if (v === 'top') {
         cam.up.copy(r2t([0, -1, 0]));
         cam.position.copy(r2t([d.W / 2, d.D / 2, d.H + 5]));
@@ -197,9 +197,9 @@
       var tw = g.measureText(text).width;
       if (tw > 960) g.font = 'bold ' + Math.floor(64 * 960 / tw) + 'px "Segoe UI", Arial, sans-serif';
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.lineWidth = 8; g.strokeStyle = 'rgba(40,20,0,0.85)';
+      g.lineWidth = 8; g.strokeStyle = '#421400D9';
       g.strokeText(text, 512, 66);
-      g.fillStyle = '#ffd9a0';
+      g.fillStyle = '#DE9373';
       g.fillText(text, 512, 66);
       var t = new THREE.CanvasTexture(c);
       t.colorSpace = THREE.SRGBColorSpace;
@@ -250,7 +250,7 @@
       });
       var wg = new THREE.BufferGeometry();
       wg.setAttribute('position', new THREE.Float32BufferAttribute(wirePts, 3));
-      var wires = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0x8a8f96 }));
+      var wires = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0x78687D }));
       wires.userData.ownMaterial = true;
       decorGroup.add(wires);
 
@@ -274,20 +274,20 @@
       disposeGroup(bodyGroup);
       var b = profile.body;
       var geo = new THREE.BoxGeometry(b.w, b.h, b.d);
-      var mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x4a4f57 }));
+      var mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x504653 }));
       mesh.userData.ownMaterial = true;
       mesh.position.set(-(b.lensRight || 0), b.h / 2 - (b.lensUp || 0), b.d / 2);
       bodyGroup.add(mesh);
-      var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x9aa0a8 }));
+      var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xA295A7 }));
       edges.userData.ownMaterial = true;
       edges.position.copy(mesh.position);
       bodyGroup.add(edges);
-      var lens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 24), new THREE.MeshLambertMaterial({ color: 0x15171a }));
+      var lens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 24), new THREE.MeshLambertMaterial({ color: 0x151316 }));
       lens.userData.ownMaterial = true;
       lens.rotation.x = Math.PI / 2;
       lens.position.set(0, 0, -0.015);
       bodyGroup.add(lens);
-      var dot = new THREE.Mesh(new THREE.CircleGeometry(0.02, 24), new THREE.MeshBasicMaterial({ color: 0xffd400, side: THREE.DoubleSide }));
+      var dot = new THREE.Mesh(new THREE.CircleGeometry(0.02, 24), new THREE.MeshBasicMaterial({ color: 0xDEDA73, side: THREE.DoubleSide }));
       dot.userData.ownMaterial = true;
       dot.rotation.y = Math.PI;
       dot.position.set(0, 0, -0.031);
@@ -299,7 +299,7 @@
 
     var beamGeo = new THREE.BufferGeometry();
     beamGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24), 3));
-    var beamLines = new THREE.LineSegments(beamGeo, lineMaterial(0xff8a00));
+    var beamLines = new THREE.LineSegments(beamGeo, lineMaterial(0xDEDA73));
     beamLines.frustumCulled = false;
     helperGroup.add(beamLines);
 
@@ -356,10 +356,10 @@
       beamLines.visible = !!state.display.showFrustum;
 
       var t = state.target;
-      targetOutline = replaceHelper(targetOutline, t && t.enabled ? dashedRect(t, 0x00bcd4) : null);
+      targetOutline = replaceHelper(targetOutline, t && t.enabled ? dashedRect(t, 0x73DED5) : null);
       var pv = result.preview;
       previewOutline = replaceHelper(previewOutline,
-        state.display.keystoneSim && pv && pv.available ? dashedRect(pv.rect, 0xe91e8c) : null);
+        state.display.keystoneSim && pv && pv.available ? dashedRect(pv.rect, 0xDE73BA) : null);
     }
 
     // ---------------------------------------------------------------- depth pass

@@ -6,7 +6,7 @@
   var PS = root.PS = root.PS || {};
 
   var WIDTH = 2400;          // exported image width, px
-  var FOOTER_H = 260;        // white footer under the view, px
+  var FOOTER_H = 264;        // white footer under the view, px
   var FONT_PX = 22;
   var MIN_FONT_PX = 16;
   var LINE_H = 24;
@@ -79,7 +79,7 @@
   function summaryText() { return summaryLines().join('\n') + '\n'; }
 
   // ------------------------------------------------------------------ images
-  var KIND_COLOUR = { title: '#111', text: '#222', error: '#b3261e', warn: '#9a5200', info: '#3b4a5c', honesty: '#8a4b00' };
+  var KIND_COLOUR = { title: '#330044', text: '#252027', error: '#B81E85', warn: '#B84C1E', info: '#1E45B8', honesty: '#421400' };
 
   function drawFitted(g, text, x, y, maxW, bold) {
     var size = FONT_PX;
@@ -98,10 +98,10 @@
     var pxPerM = w / (Math.max(d.width, d.depth) * (1 + TOP_MARGIN));
     var x0 = 60, y0 = h - 70, len = pxPerM;
     g.save();
-    g.fillStyle = 'rgba(0,0,0,0.6)';
+    g.fillStyle = '#0D0C0E99';
     g.fillRect(x0 - 20, y0 - 44, len + 40 + 56, 74);
-    g.strokeStyle = '#ffffff';
-    g.fillStyle = '#ffffff';
+    g.strokeStyle = '#FFFFFF';
+    g.fillStyle = '#FFFFFF';
     g.lineWidth = 4;
     g.beginPath();
     g.moveTo(x0, y0); g.lineTo(x0 + len, y0);
@@ -124,14 +124,14 @@
     g.drawImage(base, 0, 0);
     if (view === 'top') drawScaleBar(g, base.width, base.height);
 
-    g.fillStyle = '#ffffff';
+    g.fillStyle = '#FFFFFF';
     g.fillRect(0, base.height, out.width, FOOTER_H);
-    g.fillStyle = '#c9ced6';
-    g.fillRect(0, base.height, out.width, 2);
+    g.fillStyle = '#330044';
+    g.fillRect(0, base.height, out.width, 4);
     g.textBaseline = 'alphabetic';
-    var y = base.height + 12 + FONT_PX;
+    var y = base.height + 36;
     summaryEntries().forEach(function (e) {
-      g.fillStyle = KIND_COLOUR[e.kind] || '#222';
+      g.fillStyle = KIND_COLOUR[e.kind] || '#252027';
       drawFitted(g, e.text, 24, y, out.width - 48, e.kind === 'title' || e.kind === 'honesty');
       y += LINE_H;
     });

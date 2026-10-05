@@ -228,6 +228,7 @@
       }
       pre.textContent = lines.join('\n');
       document.body.dataset.selftest = allOk ? 'PASS' : 'FAIL';
+      if (root.parent !== root) root.parent.postMessage({ selftest: allOk ? 'PASS' : 'FAIL', lines: lines }, '*');
       return allOk;
     });
   }
