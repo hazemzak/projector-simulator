@@ -115,11 +115,37 @@
     return errors;
   }
 
+  const MAX_FRAMES = 3;
+
+  // Frames are optional; absent means none. Positions outside the wall are allowed (warnings elsewhere).
+  function validateFrames(frames) {
+    const errors = [];
+    if (!Array.isArray(frames)) return ['Frames must be a list.'];
+    if (frames.length > MAX_FRAMES) errors.push('At most ' + MAX_FRAMES + ' frames are allowed.');
+    const seen = {};
+    frames.forEach(function (f, i) {
+      const label = 'Frame ' + (i + 1);
+      if (!f || typeof f !== 'object' || Array.isArray(f)) { errors.push(label + ' is malformed.'); return; }
+      if (typeof f.id !== 'string' || !f.id) errors.push(label + ': id is missing.');
+      else if (seen[f.id]) errors.push(label + ': duplicate id "' + f.id + '".');
+      else seen[f.id] = true;
+      if (typeof f.name !== 'string') errors.push(label + ': name must be text.');
+      ['u', 'bottom', 'width', 'height', 'depth'].forEach(function (k) {
+        if (!isNum(f[k])) errors.push(label + ': ' + k + ' must be a number.');
+      });
+      if (isNum(f.width) && !(f.width > 0)) errors.push(label + ': width must be greater than 0.');
+      if (isNum(f.height) && !(f.height > 0)) errors.push(label + ': height must be greater than 0.');
+      if (isNum(f.depth) && f.depth < 0) errors.push(label + ': depth must be 0 or more.');
+    });
+    return errors;
+  }
+
   function validateState(s) {
     const errors = [];
     if (!s || typeof s !== 'object') return ['State is missing.'];
     if (s.schema !== SCHEMA) errors.push('Unknown schema "' + s.schema + '".');
     Room.validate(s.room).forEach(function (m) { errors.push('Room: ' + m); });
+    if (s.frames !== undefined) validateFrames(s.frames).forEach(function (m) { errors.push(m); });
     if (!Array.isArray(s.customProfiles)) errors.push('Custom profiles must be a list.');
     else s.customProfiles.forEach(function (cp, i) {
       validateProfile(cp).forEach(function (m) { errors.push('Custom profile ' + (i + 1) + ': ' + m); });
@@ -163,6 +189,7 @@
     else {
       if (!isNum(d.ambient) || d.ambient < 0 || d.ambient > 1) errors.push('Display: ambient must be between 0 and 1.');
       if (!isNum(d.exposureLux) || d.exposureLux <= 0) errors.push('Display: exposureLux must be greater than 0.');
+      if (d.whiteOnFrames !== undefined && typeof d.whiteOnFrames !== 'boolean') errors.push('Display: whiteOnFrames must be true or false.');
     }
     return errors;
   }
@@ -210,7 +237,7 @@
   }
 
   function makePlacement(state, name, note) {
-    return {
+    const pl = {
       id: makeId(),
       name: name,
       note: note || '',
@@ -223,6 +250,9 @@
       obstacles: clone(state.obstacles),
       customProfiles: clone(state.customProfiles || [])
     };
+    if (state.frames !== undefined) pl.frames = clone(state.frames);
+    if (state.display && state.display.whiteOnFrames !== undefined) pl.whiteOnFrames = state.display.whiteOnFrames;
+    return pl;
   }
 
   function validatePlacement(pl) {
@@ -247,6 +277,8 @@
       room: Object.assign(Room.defaults(), pl.room), roomStatus: Object.assign(Room.defaultStatus(), pl.roomStatus),
       obstacles: pl.obstacles, customProfiles: pl.customProfiles
     });
+    if (pl.frames !== undefined) state.frames = pl.frames;
+    if (pl.whiteOnFrames !== undefined) state.display = Object.assign({}, state.display, { whiteOnFrames: pl.whiteOnFrames });
     return validateState(state);
   }
 
@@ -273,11 +305,35 @@
     s.target = clone(pl.target);
     s.customProfiles = mergeById(s.customProfiles || [], pl.customProfiles || []);
     s.calibration = Object.assign({}, s.calibration, clone(pl.calibration || {}));
+    // An old placement (no frames) clears the current frames; a new one brings its own.
+    if (pl.frames !== undefined || s.frames !== undefined) s.frames = clone(pl.frames || []);
+    if (pl.whiteOnFrames !== undefined) s.display = Object.assign({}, s.display, { whiteOnFrames: pl.whiteOnFrames });
     if (restoreRoom) {
       s.room = Object.assign(Room.defaults(), clone(pl.room));
       s.roomStatus = Object.assign(Room.defaultStatus(), clone(pl.roomStatus));
       s.obstacles = clone(pl.obstacles);
     }
+    return s;
+  }
+
+  // The Main hall example setup (K1 pose and target). Returns a new state; an active Main hall is left as is.
+  function startMainHall(state) {
+    const s = clone(state);
+    if (s.room && s.room.featureSet === 'plain' && s.room.name === 'Main hall') return s;
+    s.room = Room.mainHall();
+    s.roomStatus = Room.defaultStatus();
+    s.obstacles = [];
+    s.frames = [];
+    s.projector = {
+      profileId: DEFAULT_PROFILE_ID,
+      lens: { x: 3, y: 4, z: 1 },
+      yawDeg: 0, pitchDeg: 0, rollDeg: 0,
+      throwRatio: 2,
+      mount: 'upright',
+      shiftV: 0, shiftH: 0
+    };
+    s.target = { enabled: true, x0: 2, x1: 4, z0: 1, z1: 2.25 };
+    s.display = Object.assign({}, s.display, { whiteOnFrames: true });
     return s;
   }
 
@@ -290,6 +346,11 @@
     const aReflectance = a.wallReflectance === undefined ? Room.WALL_REFLECTANCE.def : a.wallReflectance;
     const bReflectance = b.wallReflectance === undefined ? Room.WALL_REFLECTANCE.def : b.wallReflectance;
     if (aReflectance !== bReflectance) out.push({ key: 'wallReflectance', a: aReflectance, b: bReflectance });
+    const aSet = a.featureSet || 'ubuntu', bSet = b.featureSet || 'ubuntu';
+    if (aSet !== bSet) out.push({ key: 'featureSet', a: aSet, b: bSet });
+    if (JSON.stringify(a.column || null) !== JSON.stringify(b.column || null)) {
+      out.push({ key: 'column', a: a.column || null, b: b.column || null });
+    }
     return out;
   }
 
@@ -330,6 +391,9 @@
     validatePlacement: validatePlacement,
     filterPlacements: filterPlacements,
     applyPlacement: applyPlacement,
+    startMainHall: startMainHall,
+    validateFrames: validateFrames,
+    MAX_FRAMES: MAX_FRAMES,
     diffRoom: diffRoom
   };
 });

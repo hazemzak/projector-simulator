@@ -65,13 +65,58 @@
       add('+ ' + more + ' more warning' + (more === 1 ? '' : 's') + ' (see the Warnings panel)', 'info');
     }
 
+    frameEntries(r, s).forEach(function (e) { out.push(e); });
+
     add(honestyLine(), 'honesty');
     return out;
   }
 
+  // ---- frames: native pixel corners, coverage, potential shadow (formatted from pure results only)
+  var CORNERS = ['TL', 'TR', 'BR', 'BL'];
+  function pxText(px) { return CORNERS.map(function (k) { return k + ' ' + f(px[k][0], 2) + ', ' + f(px[k][1], 2); }).join(' · '); }
+
+  function frameEntries(r, s) {
+    var out = [], frames = r.frames || [];
+    if (!frames.length) return out;
+    function add(text, kind) { out.push({ text: text, kind: kind || 'text' }); }
+    add('Frames (' + frames.length + '): pixel coordinates are native output, top-left origin, hardware keystone off; edges run 0–' +
+      r.profile.nativeW + ' × 0–' + r.profile.nativeH + '.', 'info');
+    frames.forEach(function (fr, i) {
+      var st = (s.frames || [])[i] || {};
+      add('Frame ' + (i + 1) + ' ' + (fr.name || '') + ' — u ' + f(st.u, 3) + ' · bottom ' + f(st.bottom, 3) + ' · ' + f(st.width, 3) + ' × ' +
+        f(st.height, 3) + ' m · depth ' + f(st.depth, 3) + ' m · native coverage ' + f(fr.nativeCoverage * 100, 1) + '% · inside native image: ' +
+        (fr.insideNativeImage ? 'yes' : 'no') + ' · sampled lit ' + (fr.litSampleFraction == null ? 'unavailable' : f(fr.litSampleFraction * 100, 0) + '% (approximate)'));
+      if (fr.panelPixels) {
+        var cr = fr.coveringPixelRect.unclipped;
+        add('   Native pixels: ' + pxText(fr.panelPixels) + ' · covering [' + cr.x0 + ', ' + cr.x1 + ') × [' + cr.y0 + ', ' + cr.y1 + ') = ' +
+          (cr.x1 - cr.x0) + ' × ' + (cr.y1 - cr.y0) + ' px');
+        if (fr.contentPixels && fr.contentPixels !== fr.panelPixels) {
+          add('   Corrected-content pixels (theoretical simulator correction): ' + pxText(fr.contentPixels));
+        }
+      } else {
+        add('   Native pixels: undefined (frame front level with or behind the lens).', 'warn');
+      }
+      if (fr.shadow) {
+        var sh = fr.shadow, b = sh.bounds;
+        add('   Potential geometric shadow (other obstructions can overlap it): exposed ' + f(sh.exposedArea, 4) + ' m² · silhouette ' +
+          f(sh.silhouetteArea, 4) + ' m² · u ' + f(b.u0, 3) + '–' + f(b.u1, 3) + ' · z ' + f(b.z0, 3) + '–' + f(b.z1, 3) + ' m');
+      } else {
+        add('   Potential geometric shadow: unavailable.', 'warn');
+      }
+      (fr.issues || []).forEach(function (is) { add('   NOTE ' + is.message, 'info'); });
+    });
+    return out;
+  }
+
   function honestyLine() {
-    var prof = App.result.profile;
+    var prof = App.result.profile, room = App.result.provenance && App.result.provenance.room;
     var off = prof.vOffsetStatus === 'measured' ? 'measured ' + f(prof.vOffset, 2) : 'provisional ' + f(prof.vOffset, 2);
+    if (room) {
+      var src = room.source || {};
+      return 'Room: ' + (App.state.room.name || 'plain room') + ' — scan-derived dimensions (' + (src.filename || 'scan') +
+        (src.sourceId ? ', source ' + src.sourceId : '') + ', reference lines)' + (room.ceilingAssumed ? '; box enclosure and ceiling height assumed' : '') +
+        ' — verify on site. Vertical offset: ' + off + '.';
+    }
     return 'Room: photographic estimates unless marked measured — verify on site. Vertical offset: ' + off + '.';
   }
 
@@ -114,27 +159,71 @@
     g.restore();
   }
 
-  // The view rendered at 2400 px plus the footer. Returns a canvas of width 2400.
+  function fontOf(bold) { return (bold ? 'bold ' : '') + FONT_PX + 'px "Segoe UI", Arial, sans-serif'; }
+
+  // Wrap one entry at spaces to maxW at the full font size. Continuation lines keep the entry's indent.
+  // A token wider than maxW is split by characters, so nothing is ever cut off.
+  function wrapEntry(g, e, maxW) {
+    var bold = e.kind === 'title' || e.kind === 'honesty';
+    g.font = fontOf(bold);
+    var indent = /^ */.exec(e.text)[0], words = e.text.slice(indent.length).split(' '), lines = [], cur = indent;
+    function push() { lines.push({ text: cur, kind: e.kind, bold: bold }); cur = indent + '   '; }
+    words.forEach(function (w) {
+      var trial = cur.trim() === '' ? cur + w : cur + ' ' + w;
+      if (g.measureText(trial).width <= maxW) { cur = trial; return; }
+      if (cur.trim() !== '') push();
+      while (g.measureText(cur + w).width > maxW && w.length > 1) {
+        var n = w.length - 1;
+        while (n > 1 && g.measureText(cur + w.slice(0, n)).width > maxW) n--;
+        cur += w.slice(0, n); w = w.slice(n); push();
+      }
+      cur += w;
+    });
+    if (cur.trim() !== '') lines.push({ text: cur, kind: e.kind, bold: bold });
+    return lines;
+  }
+
+  // The view rendered at 2400 px plus the footer. Returns a canvas of width 2400. Without frames the footer is the
+  // fixed legacy one (fitted single lines); with frames it is wrapped and sized to its content.
   function annotatedCanvas(view) {
     var base = App.renderToCanvas(view, WIDTH);
+    var entries = summaryEntries(), withFrames = !!(App.result.frames && App.result.frames.length);
+    var rows = null, footerH = FOOTER_H;
+    if (withFrames) {
+      var m = document.createElement('canvas').getContext('2d');
+      rows = [];
+      entries.forEach(function (e) { wrapEntry(m, e, base.width - 48).forEach(function (l) { rows.push(l); }); });
+      footerH = Math.max(FOOTER_H, 36 + (rows.length - 1) * LINE_H + 28);
+    }
     var out = document.createElement('canvas');
     out.width = base.width;
-    out.height = base.height + FOOTER_H;
+    out.height = base.height + footerH;
     var g = out.getContext('2d');
     g.drawImage(base, 0, 0);
     if (view === 'top') drawScaleBar(g, base.width, base.height);
 
     g.fillStyle = '#FFFFFF';
-    g.fillRect(0, base.height, out.width, FOOTER_H);
+    g.fillRect(0, base.height, out.width, footerH);
     g.fillStyle = '#252027';
     g.fillRect(0, base.height, out.width, 4);
     g.textBaseline = 'alphabetic';
     var y = base.height + 36;
-    summaryEntries().forEach(function (e) {
-      g.fillStyle = KIND_COLOUR[e.kind] || '#252027';
-      drawFitted(g, e.text, 24, y, out.width - 48, e.kind === 'title' || e.kind === 'honesty');
-      y += LINE_H;
-    });
+    if (rows) {
+      rows.forEach(function (l) {
+        g.fillStyle = KIND_COLOUR[l.kind] || '#252027';
+        g.font = fontOf(l.bold);
+        g.fillText(l.text, 24, y);
+        y += LINE_H;
+      });
+    } else {
+      entries.forEach(function (e) {
+        g.fillStyle = KIND_COLOUR[e.kind] || '#252027';
+        drawFitted(g, e.text, 24, y, out.width - 48, e.kind === 'title' || e.kind === 'honesty');
+        y += LINE_H;
+      });
+    }
+    out.footerHeight = footerH;
+    out.footerRows = rows ? rows.length : entries.length;
     return out;
   }
 

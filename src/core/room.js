@@ -76,11 +76,58 @@
     return o;
   }
 
+  // Main hall: a plain box (scan reference lines) with one filled column. Fresh object on every call.
+  function mainHall() {
+    const o = defaults();
+    o.width = 6.34;
+    o.depth = 7.75;
+    o.ceiling = 3.8823528;
+    o.featureSet = 'plain';
+    o.name = 'Main hall';
+    o.column = { id: 'main-column', label: 'Main hall column', min: [3.98, 3.09, 0], max: [4.73, 4.16, 3.8823528] };
+    o.source = { filename: 'main_hall_openplan3d.json', sourceId: 'q7jpkqtl', floorId: '449yvo5n',
+      convention: 'scan-reference-lines', ceilingAssumed: true };
+    return o;
+  }
+
+  function isPlain(p) { return !!p && p.featureSet === 'plain'; }
+
+  function finiteVec3(v) {
+    return Array.isArray(v) && v.length === 3 && v.every(function (c) { return typeof c === 'number' && isFinite(c); });
+  }
+
   // ---- validation ----------------------------------------------------------------------------
+
+  function validatePlain(p) {
+    const msgs = [];
+    [['width', 'Back wall width'], ['depth', 'Room depth'], ['ceiling', 'Ceiling height']].forEach(function (d) {
+      const v = p[d[0]];
+      if (typeof v !== 'number' || !isFinite(v)) msgs.push(d[1] + ' (' + d[0] + ') must be a number.');
+      else if (v <= 0) msgs.push(d[1] + ' must be greater than 0.');
+    });
+    if (typeof p.wallReflectance !== 'number' || !isFinite(p.wallReflectance) ||
+        p.wallReflectance < 0 || p.wallReflectance > 1) msgs.push('Wall reflectance (wallReflectance) must be between 0 and 1.');
+    if (p.name !== undefined && typeof p.name !== 'string') msgs.push('Room name must be text.');
+    if (p.column !== undefined) {
+      const c = p.column;
+      if (!c || typeof c !== 'object' || Array.isArray(c)) msgs.push('Room column must be an object.');
+      else if (typeof c.id !== 'string' || !c.id) msgs.push('Room column id is missing.');
+      else if (!finiteVec3(c.min) || !finiteVec3(c.max)) msgs.push('Room column min/max must be [x, y, z] numbers.');
+      else {
+        const box = [p.width, p.depth, p.ceiling];
+        for (let k = 0; k < 3; k++) {
+          if (!(c.min[k] < c.max[k])) { msgs.push('Room column min must be below max on every axis.'); break; }
+          if (typeof box[k] === 'number' && (c.min[k] < 0 || c.max[k] > box[k])) { msgs.push('Room column must be inside the room.'); break; }
+        }
+      }
+    }
+    return msgs;
+  }
 
   function validate(p) {
     const msgs = [];
     if (!p || typeof p !== 'object') return ['Room is missing.'];
+    if (isPlain(p)) return validatePlain(p);
     let numeric = true;
     PARAMS.forEach(function (d) {
       const v = p[d.key];
@@ -117,7 +164,34 @@
 
   // ---- geometry ------------------------------------------------------------------------------
 
+  function buildPlainScene(p, obstacles) {
+    const W = p.width, Dp = p.depth, Hc = p.ceiling;
+    const solids = [];
+    if (p.column) {
+      solids.push({ id: p.column.id, label: p.column.label || p.column.id, min: p.column.min.slice(), max: p.column.max.slice(),
+        group: 'obstacle', provisional: false });
+    }
+    (obstacles || []).forEach(function (o) {
+      if (!o || !o.enabled) return;
+      solids.push({ id: o.id, label: o.name || o.id, min: o.min.slice(), max: o.max.slice(), group: 'obstacle', provisional: false, user: true });
+    });
+    const shell = {
+      min: [0, 0, 0], max: [W, Dp, Hc], size: [W, Dp, Hc], width: W, depth: Dp, height: Hc,
+      classes: Object.assign({}, FACE_CLASSES)
+    };
+    const quads = [
+      { id: 'back', cls: 'backWall', corners: [[0, 0, 0], [W, 0, 0], [W, 0, Hc], [0, 0, Hc]], inwardNormal: [0, 1, 0], alwaysProvisional: false },
+      { id: 'right', cls: 'rightWall', corners: [[W, 0, 0], [W, Dp, 0], [W, Dp, Hc], [W, 0, Hc]], inwardNormal: [-1, 0, 0], alwaysProvisional: false },
+      { id: 'floor', cls: 'floor', corners: [[0, 0, 0], [W, 0, 0], [W, Dp, 0], [0, Dp, 0]], inwardNormal: [0, 0, 1], alwaysProvisional: false },
+      { id: 'ceiling', cls: 'ceiling', corners: [[0, 0, Hc], [W, 0, Hc], [W, Dp, Hc], [0, Dp, Hc]], inwardNormal: [0, 0, -1], alwaysProvisional: false },
+      { id: 'front', cls: 'frontWall', corners: [[0, Dp, 0], [W, Dp, 0], [W, Dp, Hc], [0, Dp, Hc]], inwardNormal: [0, -1, 0], alwaysProvisional: true },
+      { id: 'left', cls: 'leftWall', corners: [[0, 0, 0], [0, Dp, 0], [0, Dp, Hc], [0, 0, Hc]], inwardNormal: [1, 0, 0], alwaysProvisional: false }
+    ];
+    return { shell: shell, holes: [], solids: solids, quads: quads, wires: [], railUnderside: null };
+  }
+
   function buildScene(p, obstacles) {
+    if (isPlain(p)) return buildPlainScene(p, obstacles);
     const W = p.width, Dp = p.depth, Hc = p.ceiling;
     const s = p.railSec;
     const Hr = Hc - p.railDrop;
@@ -202,6 +276,8 @@
     FACE_CLASSES: FACE_CLASSES,
     defaults: defaults,
     defaultStatus: defaultStatus,
+    mainHall: mainHall,
+    isPlain: isPlain,
     validate: validate,
     buildScene: buildScene
   };

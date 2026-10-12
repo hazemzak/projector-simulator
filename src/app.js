@@ -51,6 +51,8 @@
     S.setContentCanvas(canvas);
   }
 
+  function isMainHall(s) { return !!(s && s.room && s.room.featureSet === 'plain' && s.room.name === 'Main hall'); }
+
   // Validate, analyse and apply a candidate state. Returns {ok, errors}.
   function apply(candidate, source) {
     var errors = Model.validateState(candidate);
@@ -58,10 +60,13 @@
     var res;
     try { res = Analysis.analyze(candidate, PS.Profiles); }
     catch (e) { return { ok: false, errors: [e.message] }; }
+    // Starting Main hall from the panel opens the wall view, where its target and frames are usable at once.
+    var startsMainHall = source === 'panel' && isMainHall(candidate) && !isMainHall(state);
     state = candidate;
     result = res;
     S.sync(state, result, source);
     if (contentKey !== profileKey(result.profile) + '|' + content.kind) rebuildContent();
+    if (startsMainHall && S.getView() !== 'wall') App.setView('wall');
     emit('change', { state: state, result: result, source: source });
     return { ok: true, errors: [] };
   }

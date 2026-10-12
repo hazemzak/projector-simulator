@@ -1,8 +1,9 @@
-﻿/* State -> readouts + warnings + provenance (PLAN.md §5). Pure: no THREE, no DOM. Uses Optics, Room, Model. */
+﻿/* State -> readouts + warnings + provenance (PLAN.md §5). Pure: no THREE, no DOM. Uses Optics, Room, Model,
+ * Frames and FrameEffects (P12 FAST: frames are receivers in the augmented scene). */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./optics.js'), require('./room.js'), require('./model.js'));
-  else { root.PS = root.PS || {}; root.PS.Analysis = factory(root.PS.Optics, root.PS.Room, root.PS.Model); }
-})(typeof self !== 'undefined' ? self : this, function (Optics, Room, Model) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./optics.js'), require('./room.js'), require('./model.js'), require('./frames.js'), require('./frame-effects.js'));
+  else { root.PS = root.PS || {}; root.PS.Analysis = factory(root.PS.Optics, root.PS.Room, root.PS.Model, root.PS.Frames, root.PS.FrameEffects); }
+})(typeof self !== 'undefined' ? self : this, function (Optics, Room, Model, Frames, FrameEffects) {
   'use strict';
 
 
@@ -24,7 +25,7 @@
   }
 
 
-  const CODE_ORDER = ['W_OUTSIDE_ROOM', 'W_BODY', 'W_NOT_FACING', 'W_DISTANCE', 'W_CLIPPED', 'W_OFF_WALL', 'W_KEYSTONE', 'W_ROLL',
+  const CODE_ORDER = ['W_OUTSIDE_ROOM', 'E_BODY_COLLISION', 'W_BODY', 'W_NOT_FACING', 'W_DISTANCE', 'W_CLIPPED', 'W_OFF_WALL', 'W_KEYSTONE', 'W_ROLL',
     'I_TARGET', 'I_OFFSET', 'I_ROOM'];
   const SPILL_KEYS = ['leftWall', 'rightWall', 'frontWall', 'floor', 'ceiling', 'opening'];
   const SURFACE_NAMES = {
@@ -39,7 +40,11 @@
     if (!profile) throw new Error('Unknown projector profile "' + state.projector.profileId + '".');
     const proj = state.projector;
     const room = state.room;
-    const scene = Room.buildScene(room, state.obstacles);
+    const frames = Array.isArray(state.frames) ? state.frames : [];
+    const plain = Room.isPlain(room);
+    const baseScene = Room.buildScene(room, state.obstacles);
+    const scene = frames.length ? Frames.attach(baseScene, frames) : baseScene;
+    const previewEnabled = !!(state.display && state.display.keystoneSim);
     const L = [proj.lens.x, proj.lens.y, proj.lens.z];
     const B = Optics.basis(proj.yawDeg, proj.pitchDeg, proj.rollDeg);
     const f = B.f;
@@ -62,7 +67,19 @@
       if (!insideShell(scene, c)) bodyHit = 'room boundary';
       else { const s = containingSolid(scene, c); if (s) bodyHit = s.label; }
     });
-    if (bodyHit) warn('W_BODY', 'warn', 'Projector body intersects ' + bodyHit + '.');
+    // Plain rooms and frame scenes also use the exact oriented-box test, which catches a body that
+    // straddles a solid without any corner inside it. Legacy rooms without frames keep the corner test.
+    let bodySolidHit = null;
+    if (plain || frames.length) {
+      for (let i = 0; i < scene.solids.length && !bodySolidHit; i++) {
+        const s = scene.solids[i];
+        if (FrameEffects.bodyIntersectsBox(bodyCorners, s.min, s.max)) bodySolidHit = s;
+      }
+    }
+    if (bodySolidHit) {
+      warn('E_BODY_COLLISION', 'error', 'Projector body intersects ' + bodySolidHit.label + '; this position is not physically possible.');
+    }
+    if (bodyHit || bodySolidHit) warn('W_BODY', 'warn', 'Projector body intersects ' + (bodyHit || bodySolidHit.label) + '.');
     const bodyZ = bodyCorners.map(function (c) { return c[2]; });
 
     // ---- image on the back-wall plane (Optics.imageOnWall already carries the readouts)
@@ -83,7 +100,7 @@
       };
       const clipped = Optics.clipPolygonToRect(img.quad, 0, room.width, 0, room.ceiling);
       imageOnWallFrac = area > 0 && clipped.length >= 3 ? Optics.polygonArea(clipped) / area : 0;
-      greyGap = room.greyTop - Math.max(img.corners.TL[2], img.corners.TR[2]);
+      greyGap = plain ? null : room.greyTop - Math.max(img.corners.TL[2], img.corners.TR[2]);
       luxInfo = { nominal: img.luxNominal, min: img.luxMin, max: img.luxMax, corners: img.cornerLux };
       const luminanceFactor = room.wallReflectance / Math.PI;
       const luminanceCorners = {};
@@ -168,6 +185,15 @@
 
     // ---- keystone preview (Optics decides availability and the reason)
     const preview = Optics.keystonePreview(profile, proj);
+
+    // ---- frames: mapping, then shadows and front illumination (receivers; never generic obstructions)
+    let frameResults = [];
+    let frameOverlay = null;
+    if (frames.length) {
+      const mapped = Frames.map(room, frames, profile, proj, preview, previewEnabled);
+      frameOverlay = mapped.frameOverlay;
+      frameResults = FrameEffects.analyze(room, frames, mapped.frames, profile, proj, scene, preview, previewEnabled);
+    }
     // ---- info warnings
     if (t && t.enabled && (target ? target.covered : 0) < 0.995) {
       warn('I_TARGET', 'info', 'Target ' + pct(target ? target.covered : 0) + '% covered.');
@@ -177,11 +203,19 @@
       warn('I_OFFSET', 'info', 'Vertical offset is a provisional default (' + profile.vOffset.toFixed(2) + '). Measure it (Help).');
     }
     let nEst = 0, nProv = 0, nUser = 0;
-    Room.PARAMS.forEach(function (p) {
+    // A plain box has no photographic Ubuntu parameters: its dimensions are scan-derived and only the
+    // box enclosure / ceiling height is assumed.
+    const ceilingAssumed = plain && !!(room.source && room.source.ceilingAssumed);
+    if (plain) nProv = ceilingAssumed ? 1 : 0;
+    else Room.PARAMS.forEach(function (p) {
       const st = (state.roomStatus || {})[p.key] || p.status;
       if (st === 'user') nUser++; else if (st === 'estimate') nEst++; else nProv++;
     });
-    if (nEst + nProv > 0) {
+    if (plain) {
+      if (ceilingAssumed) {
+        warn('I_ROOM', 'info', 'Room dimensions come from the scan; the box enclosure and ceiling height are assumed — verify on site.');
+      }
+    } else if (nEst + nProv > 0) {
       warn('I_ROOM', 'info', nEst + ' room values are photographic estimates, ' + nProv +
         ' provisional/assumed — verify on site.');
     }
@@ -206,8 +240,14 @@
       luminance: luminanceInfo,
       pxPerCm: pxInfo,
       keystone: keystone,
-      lens: { z: L[2], dropBelowCeiling: room.ceiling - L[2] },
-      body: { lowest: Math.min.apply(null, bodyZ), highest: Math.max.apply(null, bodyZ), corners: bodyCorners },
+      lens: plain
+        ? { z: L[2], dropBelowCeiling: room.ceiling - L[2], dropLabel: 'below assumed box ceiling' }
+        : { z: L[2], dropBelowCeiling: room.ceiling - L[2] },
+      body: { lowest: Math.min.apply(null, bodyZ), highest: Math.max.apply(null, bodyZ), corners: bodyCorners,
+        collides: !!bodySolidHit, collidesWith: bodySolidHit ? bodySolidHit.label : null },
+      scene: scene,
+      frames: frameResults,
+      frameOverlay: frameOverlay,
       beam: beam,
       target: target,
       preview: preview,
@@ -215,10 +255,11 @@
       warnings: warnings,
       provenance: {
         roomEstimated: nEst, roomProvisional: nProv, roomUser: nUser,
+        room: plain ? { kind: 'scan-box', source: room.source || null, ceilingAssumed: ceilingAssumed } : null,
         offsetStatus: profile.vOffsetStatus, offsetProvisional: offsetProvisional,
         // † depends on a provisional offset, ‡ on non-user room values (PLAN.md §5)
         marks: {
-          image: '†', corners: '†', imageOnWall: '‡', greyGap: '†‡', target: '†', preview: '†', lens: '‡', body: '‡', beam: '‡'
+          image: '†', corners: '†', imageOnWall: '‡', greyGap: plain ? null : '†‡', target: '†', preview: '†', lens: '‡', body: '‡', beam: '‡'
         }
       }
     };

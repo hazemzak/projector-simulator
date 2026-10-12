@@ -15,6 +15,11 @@
   var VIEWS = ['persp', 'top', 'wall', 'projector'];
   var MARGIN = 0.08;
   var BG = '#0D0C0E';
+  var FRAME_COLOUR = '#d9d5ca';
+  // Rendering-only separation of a zero-depth frame front from the wall behind it (metres, toward +y).
+  // It is far below the legacy depth bias, so lighting and visibility are unchanged; it only stops z-fighting.
+  var FRONT_LIFT = 0.0005;
+  var OUTLINE_Y = 0.006, OUTLINE_HW = 0.004;
 
   function create(host) {
     var renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -172,6 +177,7 @@
 
     function solidColour(s) {
       var C = Room.COLORS;
+      if (s.group === 'frame') return FRAME_COLOUR;
       if (s.user) return C.obstacle;
       if (s.id === 'ac') return C.ac;
       if (s.id.indexOf('rail') === 0 || s.id.indexOf('spot') === 0) return C.rail;
@@ -183,6 +189,12 @@
 
     function shellMaterial(q, p) {
       var C = Room.COLORS;
+      if (Room.isPlain(p)) {
+        // plain room: one flat colour per surface class, no paint split and no photo-depth hatch
+        if (q.cls === 'floor') return material({ albedo: C.floor, hatchMode: 0 });
+        if (q.cls === 'ceiling') return material({ albedo: C.ceiling, hatchMode: 0 });
+        return material({ albedo: C.wallWhite, hatchMode: 0 });
+      }
       var hatch = q.alwaysProvisional ? 2 : 1;
       if (q.cls === 'floor') return material({ albedo: C.floor, hatchMode: hatch });
       if (q.cls === 'ceiling') return material({ albedo: C.ceiling, hatchMode: hatch });
@@ -206,11 +218,11 @@
       return t;
     }
 
-    function buildRoom(state) {
+    function buildRoom(state, result) {
       disposeGroup(roomGroup);
       disposeGroup(decorGroup);
-      var p = state.room;
-      var sc = Room.buildScene(p, state.obstacles);
+      var p = state.room, plain = Room.isPlain(p);
+      var sc = (result && result.scene) || Room.buildScene(p, state.obstacles);
 
       sc.quads.forEach(function (q) {
         var pts = q.corners.map(r2t);
@@ -234,13 +246,36 @@
         var centre = r2t([(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, (s.min[2] + s.max[2]) / 2]);
         var geo = new THREE.BoxGeometry(size.x, size.y, size.z);
         geo.translate(centre.x, centre.y, centre.z);
-        var opts = { albedo: solidColour(s), hatchMode: s.provisional ? 2 : 1 };
-        if (s.id === 'pier') { opts.split = true; opts.albedoUpper = Room.COLORS.wallWhite; }
+        var opts = { albedo: solidColour(s), hatchMode: (plain || s.group === 'frame') ? 0 : (s.provisional ? 2 : 1) };
+        if (s.id === 'pier' && !plain) { opts.split = true; opts.albedoUpper = Room.COLORS.wallWhite; }
         var mesh = new THREE.Mesh(geo, material(opts));
         mesh.name = 'solid-' + s.id;
+        if (s.frameId) mesh.userData.frameId = s.frameId;
         mesh.layers.enable(1);
         roomGroup.add(mesh);
       });
+
+      // zero-depth frames: flush fronts, lifted FRONT_LIFT off the wall for rendering only
+      (sc.frameFronts || []).forEach(function (fr) {
+        var c = fr.corners, pts = [c.TL, c.TR, c.BR, c.BL].map(function (q) { return r2t([q[0], q[1] + FRONT_LIFT, q[2]]); });
+        var n = new THREE.Vector3().subVectors(pts[1], pts[0]).cross(new THREE.Vector3().subVectors(pts[2], pts[0]));
+        var inward = r2t(fr.normal);
+        if (n.dot(inward) < 0) pts.reverse();
+        var pos = [], nrm = [];
+        pts.forEach(function (v) { pos.push(v.x, v.y, v.z); nrm.push(inward.x, inward.y, inward.z); });
+        var fg = new THREE.BufferGeometry();
+        fg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        fg.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+        fg.setIndex([0, 1, 2, 0, 2, 3]);
+        var fm = new THREE.Mesh(fg, material({ albedo: FRAME_COLOUR, hatchMode: 0 }));
+        fm.name = 'frame-front-' + fr.frameId;
+        fm.userData.frameId = fr.frameId;
+        fm.layers.enable(1);
+        roomGroup.add(fm);
+      });
+
+      // the plain room has no wires, no floor label and no fixtures
+      if (plain) return;
 
       // decor: suspension wires (drawn, not optical)
       var wirePts = [];
@@ -303,7 +338,7 @@
     beamLines.frustumCulled = false;
     helperGroup.add(beamLines);
 
-    var targetOutline = null, previewOutline = null;
+    var targetOutline = null, previewOutline = null, shadowOutline = null;
 
     // Dashed rectangle on the back wall plane as thin ribbons (GL lines are 1 px wide).
     function dashedRect(r, color) {
@@ -336,6 +371,36 @@
       return m;
     }
 
+    // Solid outline of the exposed frame-shadow polygons ([[u, z], ...] each) on the back wall plane, as ribbons.
+    // Each edge is extended by the half width so the corners close. Returns null when there is nothing to draw.
+    function outlineRibbons(polys, color) {
+      var pos = [], idx = [];
+      polys.forEach(function (poly) {
+        for (var i = 0; i < poly.length; i++) {
+          var a = poly[i], b = poly[(i + 1) % poly.length];
+          var len = Math.sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+          if (!(len > 1e-9)) continue;
+          var dx = (b[0] - a[0]) / len, dz = (b[1] - a[1]) / len, nx = -dz, nz = dx, hw = OUTLINE_HW;
+          var p0 = [a[0] - dx * hw, a[1] - dz * hw], p1 = [b[0] + dx * hw, b[1] + dz * hw];
+          var i0 = pos.length / 3;
+          [[p0[0] - nx * hw, p0[1] - nz * hw], [p0[0] + nx * hw, p0[1] + nz * hw],
+           [p1[0] + nx * hw, p1[1] + nz * hw], [p1[0] - nx * hw, p1[1] - nz * hw]].forEach(function (c) {
+            var v = r2t([c[0], OUTLINE_Y, c[1]]);
+            pos.push(v.x, v.y, v.z);
+          });
+          idx.push(i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3);
+        }
+      });
+      if (!idx.length) return null;
+      var g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      var m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide }));
+      m.userData.ownMaterial = true;
+      m.name = 'frame-shadow-outline';
+      return m;
+    }
+
     function replaceHelper(old, mesh) {
       if (old) { helperGroup.remove(old); old.geometry.dispose(); old.material.dispose(); }
       if (mesh) helperGroup.add(mesh);
@@ -360,6 +425,12 @@
       var pv = result.preview;
       previewOutline = replaceHelper(previewOutline,
         state.display.keystoneSim && pv && pv.available ? dashedRect(pv.rect, 0xDE73BA) : null);
+
+      var polys = [];
+      (result.frames || []).forEach(function (fr) {
+        if (fr && fr.shadow && fr.shadow.exposedPolygons) fr.shadow.exposedPolygons.forEach(function (pg) { polys.push(pg); });
+      });
+      shadowOutline = replaceHelper(shadowOutline, outlineRibbons(polys, 0xF2C94C));
     }
 
     // ---------------------------------------------------------------- depth pass
@@ -395,11 +466,11 @@
       var prev = cur;
       cur = { state: state, result: result, profile: profile };
 
-      var rk = JSON.stringify([state.room, state.obstacles.filter(function (o) { return o.enabled; })]);
+      var rk = JSON.stringify([state.room, state.obstacles.filter(function (o) { return o.enabled; }), state.frames || []]);
       var roomChanged = rk !== roomKey;
       if (roomChanged) {
         roomKey = rk;
-        buildRoom(state);
+        buildRoom(state, result);
         var dk = [state.room.width, state.room.depth, state.room.ceiling].join(',');
         if (dk !== roomDimsKey) {
           roomDimsKey = dk;
@@ -442,6 +513,7 @@
         shared.uHomography.value.set(h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8]);
         shared.uUseHomography.value = 1;
       } else shared.uUseHomography.value = 0;
+      Shaders.updateFrameUniforms(shared, result, state);
 
       ensureDepthTarget(Shaders.DEPTH_W, Math.round(Shaders.DEPTH_W * w.aspect));
       depthDirty = true;
@@ -607,4 +679,107 @@
   }
 
   PS.Scene = { create: create, r2t: r2t, t2r: t2r, VIEWS: VIEWS };
+
+  // ---------------------------------------------------------------- browser probes (drained by selftest.js)
+  function probe(name, fn) { (PS.pendingSelfTests = PS.pendingSelfTests || []).push([name, fn]); }
+
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  function hallState(frames, white) {
+    var s = PS.Model.startMainHall(PS.Model.defaultState());
+    s.frames = frames || [];
+    s.display = Object.assign({}, s.display, { whiteOnFrames: !!white });
+    return s;
+  }
+
+  function named(App, prefix) {
+    var out = [];
+    App.scene.traverse(function (o) { if (o.name && o.name.indexOf(prefix) === 0) out.push(o); });
+    return out;
+  }
+
+  function put(App, s) {
+    var r = App.replaceState(s, 'selftest');
+    if (!r.ok) throw new Error('state rejected: ' + r.errors.join('; '));
+    App.renderNow();
+  }
+
+  function frameDef(id, u, bottom, w, h, d) { return { id: id, name: id, u: u, bottom: bottom, width: w, height: h, depth: d }; }
+
+  probe('scene.p12.mask-uniform-packing', function (App) {
+    var sh = Shaders.createUniforms(), edges = [], i;
+    for (i = 0; i < 12; i++) edges.push([i + 1, -(i + 1), 0.5]);
+    Shaders.updateFrameUniforms(sh, { frameOverlay: { count: 3, edges: edges } }, { display: { whiteOnFrames: true } });
+    var ok = sh.uFrameMaskCount.value === 3 && sh.uWhiteOnFrames.value === 1 && sh.uFrameMaskEdges.value.length === 12 &&
+             sh.uFrameMaskEdges.value[11].x === 12 && sh.uFrameMaskEdges.value[11].y === -12 && sh.uFrameMaskEdges.value[11].z === 0.5;
+    Shaders.updateFrameUniforms(sh, { frameOverlay: null }, { display: { whiteOnFrames: true } });
+    ok = ok && sh.uFrameMaskCount.value === 0 && sh.uWhiteOnFrames.value === 0 && sh.uFrameMaskEdges.value[0].x === 0;
+    return { ok: ok, detail: 'count, edges and white flag follow frameOverlay and display.whiteOnFrames' };
+  });
+
+  probe('scene.p12.plain-room-has-no-fixtures', function (App) {
+    put(App, hallState([], false));
+    var extra = named(App, 'solid-').filter(function (o) { return o.name !== 'solid-main-column'; });
+    var hasColumn = named(App, 'solid-main-column').length === 1;
+    var hatched = named(App, 'shell-').concat(named(App, 'solid-')).some(function (m) {
+      return m.material.uniforms.uSplit.value > 0.5 || m.material.uniforms.uHatchMode.value > 0.5;
+    });
+    return { ok: extra.length === 0 && hasColumn && !hatched,
+      detail: 'extra solids ' + extra.length + ', column ' + hasColumn + ', split/hatch ' + hatched };
+  });
+
+  probe('scene.p12.frame-meshes-follow-edits', function (App) {
+    var s = hallState([frameDef('a', 0.5, 1, 1, 1, 0.05), frameDef('b', 2, 1, 1, 1, 0)], false);
+    put(App, s);
+    var n0 = named(App, 'solid-frame:').length + named(App, 'frame-front-').length;
+    s = clone(App.state); s.frames[0].u = 1.25; s.frames[0].width = 1.5;
+    put(App, s);
+    var slab = named(App, 'solid-frame:a')[0], bb = new THREE.Box3().setFromObject(slab);
+    var moved = Math.abs(bb.min.x - 1.25) < 1e-6 && Math.abs(bb.max.x - 2.75) < 1e-6;
+    s = clone(App.state); s.frames = [];
+    put(App, s);
+    var n1 = named(App, 'solid-frame:').length + named(App, 'frame-front-').length + named(App, 'frame-shadow-outline').length;
+    return { ok: n0 === 2 && moved && n1 === 0, detail: 'meshes ' + n0 + ' -> after delete ' + n1 + ', resized slab x ' + bb.min.x.toFixed(3) + '..' + bb.max.x.toFixed(3) };
+  });
+
+  probe('scene.p12.frame-in-depth-pass', function (App) {
+    put(App, hallState([frameDef('a', 0.5, 1, 1, 1, 0.05), frameDef('b', 2, 1, 1, 1, 0)], false));
+    var ms = named(App, 'solid-frame:').concat(named(App, 'frame-front-'));
+    var ok = ms.length === 2 && ms.every(function (m) { return (m.layers.mask & 2) !== 0; });
+    return { ok: ok, detail: ms.length + ' frame meshes, all on layer 1 (depth pass)' };
+  });
+
+  probe('scene.p12.outline-matches-exposed-polygon', function (App) {
+    put(App, hallState([frameDef('a', 0.5, 1, 1, 1, 0.08)], false));
+    var polys = [];
+    (App.result.frames || []).forEach(function (f) { if (f.shadow) f.shadow.exposedPolygons.forEach(function (p) { polys.push(p); }); });
+    var o = named(App, 'frame-shadow-outline')[0];
+    if (!polys.length) return { ok: !o, detail: 'no exposed polygon (' + (o ? 'stale outline present' : 'no outline') + ')' };
+    if (!o) return { ok: false, detail: polys.length + ' exposed polygon(s) but no outline mesh' };
+    var pa = o.geometry.attributes.position, worst = 0, count = 0;
+    // T frame: x = room x (u), y = room z. A ribbon corner sits OUTLINE_HW*sqrt(2) from its polygon vertex.
+    polys.forEach(function (pg) {
+      pg.forEach(function (v) {
+        var best = 1e9, k;
+        for (k = 0; k < pa.count; k++) best = Math.min(best, Math.hypot(pa.getX(k) - v[0], pa.getY(k) - v[1]));
+        worst = Math.max(worst, best); count++;
+      });
+    });
+    return { ok: worst <= OUTLINE_HW * 1.5 + 1e-4, detail: count + ' polygon vertices, worst distance to ribbon ' + (worst * 1000).toFixed(2) + ' mm' };
+  });
+  probe('scene.p12.white-mask-on-gpu', function (App) {
+    var prof, s = hallState([frameDef('a', 2.2, 1.2, 1.2, 0.8, 0.05)], true);
+    put(App, s);
+    prof = App.result.profile;
+    var c = document.createElement('canvas'); c.width = prof.nativeW; c.height = prof.nativeH;
+    var g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
+    App.setContentImage(c, 'black');
+    var cv = App.renderToCanvas('wall', 580, { opticalOnly: true, exact: true }), g2 = cv.getContext('2d');
+    function lum(x, z) {
+      var d = g2.getImageData(Math.floor(x / s.room.width * cv.width), Math.floor((1 - z / s.room.ceiling) * cv.height), 1, 1).data;
+      return (d[0] + d[1] + d[2]) / 3;
+    }
+    var inFrame = lum(2.8, 1.6), outside = lum(1.0, 1.6);
+    return { ok: inFrame > 1.5 * outside + 5, detail: 'white-on-frame ' + inFrame.toFixed(1) + ' vs black content elsewhere ' + outside.toFixed(1) };
+  });
 })(window);

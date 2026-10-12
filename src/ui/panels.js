@@ -267,8 +267,10 @@
       var offsetTxt = p.offsetProvisional ? 'PROVISIONAL' : 'measured';
       prov.className = (notUser || p.offsetProvisional) ? 'provisional' : '';
       prov.textContent = '';
-      prov.appendChild(h('span', { class: notUser ? 'amber' : '' }, 'Room: ' + p.roomEstimated + ' estimated, ' + p.roomProvisional +
-        ' provisional/assumed, ' + p.roomUser + ' measured by you'));
+      var scan = p.room;
+      prov.appendChild(h('span', { class: notUser ? 'amber' : '' }, scan
+        ? 'Room: scan-derived' + (scan.ceilingAssumed ? ', box ceiling assumed' : '')
+        : 'Room: ' + p.roomEstimated + ' estimated, ' + p.roomProvisional + ' provisional/assumed, ' + p.roomUser + ' measured by you'));
       prov.appendChild(document.createTextNode(' · '));
       prov.appendChild(h('span', { class: p.offsetProvisional ? 'amber' : '' }, 'Offset: ' + offsetTxt));
       prov.appendChild(document.createTextNode(' · All lux values nominal'));
@@ -335,7 +337,7 @@
     if (!host) return;
     var mount = h('select', { class: 'sel', 'aria-label': 'Mount' }, [
       h('option', { value: 'upright', text: 'Upright (table or stand)' }),
-      h('option', { value: 'ceiling', text: 'Ceiling-inverted' })
+      h('option', { value: 'ceiling', text: 'Inverted / upside down' })
     ]);
     mount.addEventListener('change', function () { App.update(function (d) { d.projector.mount = mount.value; }, 'panel'); });
     refreshers.push(function (state) { mount.value = state.projector.mount; });
@@ -393,6 +395,7 @@
     section(host, 'Projector', true, [
       h('div', { class: 'frow' }, [h('label', { class: 'flabel', text: 'Profile' }), profileSelect(), button('Edit profiles…', openProfileEditor, 'small')]),
       h('div', { class: 'frow' }, [h('label', { class: 'flabel', text: 'Mount' }), mount]),
+      h('div', { class: 'subhead pose-label' }, [h('span', { text: 'Example placement — choose installation position' })]),
       pos('x (from left wall)', 'x'), pos('y (from back wall)', 'y'), pos('z (above floor)', 'z'),
       ang('Yaw', 'yawDeg', 0), ang('Pitch', 'pitchDeg', 90), ang('Roll', 'rollDeg', 0),
       zoom.row, zoomBtns,
@@ -449,7 +452,7 @@
     refreshers.push(showContent);
 
     var amb = slider({
-      label: 'Room lights', step: 0.01, dec: 2, min: 0, max: 1,
+      label: 'Preview ambient brightness', step: 0.01, dec: 2, min: 0, max: 1,
       get: function (s) { return s.display.ambient; }, set: function (d, v) { d.display.ambient = v; }
     });
     var exp = slider({
@@ -470,7 +473,8 @@
       h('div', { class: 'frow' }, [h('label', { class: 'flabel', text: 'Content' }),
         h('div', { class: 'btnrow tight' }, [button('Test card', function () { App.setContentTestCard(); }), button('Load image…', function () { fileIn.click(); }), fileIn])]),
       contentName,
-      amb.row, exp.row,
+      amb.row,
+      exp.row,
       checkbox('False-colour lux', function (s) { return s.display.falseColour; }, function (d, v) { d.display.falseColour = v; }),
       legend(),
       checkbox('Show beam edges', function (s) { return s.display.showFrustum; }, function (d, v) { d.display.showFrustum = v; }),
@@ -645,18 +649,53 @@
       return f.row;
     }
 
-    var kids = groups.map(function (g, i) {
+    var reflectance = Room.WALL_REFLECTANCE;
+    var ubuntuGroups = h('div', { class: 'room-ubuntu' }, groups.map(function (g, i) {
       return h('details', { class: 'grp', open: i === 0 ? true : false }, [
         h('summary', { text: g }), h('div', { class: 'grpbody' }, byGroup[g].map(field))
       ]);
+    }));
+
+    // Plain room (Main hall): read-only dimensions and column provenance, and only the wall reflectance is editable.
+    var plainInfo = h('div', { class: 'room-plain note' });
+    var plainReflect = field(reflectance);
+    var plainBox = h('div', { class: 'room-plain-box' }, [plainInfo, plainReflect]);
+    refreshers.push(function (state) {
+      var plain = Room.isPlain(state.room), room = state.room;
+      plainBox.style.display = plain ? '' : 'none';
+      ubuntuGroups.style.display = plain ? 'none' : '';
+      if (!plain) return;
+      var col = room.column, src = room.source || {};
+      plainInfo.textContent = '';
+      plainInfo.appendChild(h('div', { text: (room.name || 'Plain room') + ': ' + fmt(room.width, 3) + ' m wide (x) × ' + fmt(room.depth, 3) + ' m deep (y) × ' +
+        fmt(room.ceiling, 3) + ' m to the assumed box ceiling.' }));
+      if (col) {
+        plainInfo.appendChild(h('div', { text: (col.label || 'Column') + ': x ' + fmt(col.min[0], 2) + '–' + fmt(col.max[0], 2) + ', y ' + fmt(col.min[1], 2) + '–' +
+          fmt(col.max[1], 2) + ', z ' + fmt(col.min[2], 2) + '–' + fmt(col.max[2], 2) + ' m (filled box, from the scan).' }));
+      }
+      plainInfo.appendChild(h('div', { text: 'Provenance: scan ' + (src.filename || 'file') + (src.sourceId ? ' (source ' + src.sourceId + ')' : '') +
+        ', reference lines' + (src.ceilingAssumed ? '; box enclosure and ceiling height assumed — verify on site.' : '.') }));
     });
-    kids.push(h('div', { class: 'btnrow' }, [
-      button('Reset room to photo estimates', function () {
-        var r = App.update(function (d) { d.room = Room.defaults(); d.roomStatus = Room.defaultStatus(); }, 'panel');
-        msg.textContent = r.ok ? '' : r.errors[0];
-      })
-    ]), msg);
-    section(host, 'Room', true, kids);
+
+    var startMain = button('Start Main hall setup', function () {
+      var r = App.update(function (d) {
+        var s = Model.startMainHall(d);
+        Object.keys(s).forEach(function (k) { d[k] = s[k]; });
+      }, 'panel');
+      msg.textContent = r.ok ? '' : r.errors[0];
+    }, 'primary', 'Replace the room, projector pose, target and frames with the Main hall example setup');
+    var resetBtn = button('Reset room to photo estimates', function () {
+      var r = App.update(function (d) {
+        if (Room.isPlain(d.room)) { d.room = Room.mainHall(); d.roomStatus = Room.defaultStatus(); }
+        else { d.room = Room.defaults(); d.roomStatus = Room.defaultStatus(); }
+      }, 'panel');
+      msg.textContent = r.ok ? '' : r.errors[0];
+    });
+    refreshers.push(function (state) {
+      var plain = Room.isPlain(state.room);
+      resetBtn.textContent = plain ? 'Reset room to Main hall values' : 'Reset room to photo estimates';
+    });
+    section(host, 'Room', true, [h('div', { class: 'btnrow' }, [startMain]), ubuntuGroups, plainBox, h('div', { class: 'btnrow' }, [resetBtn]), msg]);
   }
 
   // ------------------------------------------------------------------ readouts (PLAN 5)
@@ -697,7 +736,9 @@
       });
       rr('Image on the wall', pct(result.imageOnWallFrac), 'imageOnWall');
       var g = result.greyGap;
-      rr('Top vs grey line', Math.abs(g) < 5e-4 ? 'on the line' : fmt(Math.abs(g), 3) + ' m ' + (g > 0 ? 'below' : 'above') + ' the line', 'greyGap');
+      if (g !== null && g !== undefined) {
+        rr('Top vs grey line', Math.abs(g) < 5e-4 ? 'on the line' : fmt(Math.abs(g), 3) + ' m ' + (g > 0 ? 'below' : 'above') + ' the line', 'greyGap');
+      }
     } else {
       rr('Image', 'n/a — it does not fully reach the back wall plane');
     }
@@ -727,7 +768,7 @@
 
     sec('Placement');
     rr('Lens height z', fmt(result.lens.z, 3) + ' m', 'lens');
-    rr('Lens below ceiling', fmt(result.lens.dropBelowCeiling, 3) + ' m', 'lens');
+    rr(result.lens.dropLabel ? 'Lens ' + result.lens.dropLabel : 'Lens below ceiling', fmt(result.lens.dropBelowCeiling, 3) + ' m', 'lens');
     rr('Body lowest / highest z', fmt(result.body.lowest, 3) + ' / ' + fmt(result.body.highest, 3) + ' m', 'body');
 
     sec('Beam breakdown');
@@ -982,8 +1023,8 @@
     if (tabs.length !== 3 || tabs.map(function (tab) { return tab.textContent.split(' ')[0]; }).join(',') !== 'Setup,Results,Save') bad.push('tabs missing');
     tabs.forEach(function (tab) { clipped(tab, 'tab ' + tab.textContent); });
     var initial = document.body.dataset.mobileTab;
-    [['setup', ['projector', 'display', 'target', 'obstacles', 'room']],
-      ['results', ['warnings', 'readouts']], ['save', ['placements']]].forEach(function (group) {
+    [['setup', ['projector', 'display', 'target', 'obstacles', 'room', 'frames']],
+      ['results', ['warnings', 'readouts', 'frame-results']], ['save', ['placements']]].forEach(function (group) {
       selectMobileTab(group[0]);
       group[1].forEach(function (name) {
         var panel = $('panel-' + name);
@@ -1144,6 +1185,7 @@
     buildRoom();
     buildReadouts();
     buildWarnings();
+    if (PS.FrameUI && PS.FrameUI.init) PS.FrameUI.init(app);
     buildMobileTabs();
     touchHints();
     document.addEventListener('keydown', function (e) {
@@ -1176,7 +1218,11 @@
     });
   }
 
-  PS.Panels = { init: init, openModal: openModal, closeModal: closeModal, openHelp: openHelp };
+  PS.Panels = {
+    init: init, openModal: openModal, closeModal: closeModal, openHelp: openHelp,
+    // shared builders for src/ui/frames.js (numField registers into o.reg when given)
+    kit: { h: h, fmt: fmt, numField: numField, button: button, section: section, checkbox: checkbox }
+  };
 
   // ------------------------------------------------------------------ self-test checks (run by PS.SelfTest)
   (function () {

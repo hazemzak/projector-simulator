@@ -44,6 +44,9 @@
     'uniform vec3 uHatchColour;',
     'uniform float uSplit;',
     'uniform float uHatchMode;',
+    'uniform int uFrameMaskCount;',
+    'uniform vec3 uFrameMaskEdges[12];',
+    'uniform float uWhiteOnFrames;',
     'varying vec3 vPos;',
     'varying vec3 vNrm;',
     '',
@@ -87,6 +90,20 @@
     '  vec2 cuv = puv;',
     '  if (uUseHomography > 0.5) { vec3 h = uHomography * vec3(puv, 1.0); cuv = h.xy / h.z; }',
     '  vec3 tex = texture2D(uContent, cuv).rgb;',
+    '  // white on frames: the mask is tested in the native image plane, before the content homography',
+    '  if (uWhiteOnFrames > 0.5) {',
+    '    vec2 mp = vec2(puv.x, 1.0 - puv.y);',
+    '    for (int q = 0; q < 3; q++) {',
+    '      if (q < uFrameMaskCount) {',
+    '        bool inside = true;',
+    '        for (int e = 0; e < 4; e++) {',
+    '          vec3 ed = uFrameMaskEdges[q * 4 + e];',
+    '          if (ed.x * mp.x + ed.y * mp.y + ed.z < -1e-7) inside = false;',
+    '        }',
+    '        if (inside) tex = vec3(1.0);',
+    '      }',
+    '    }',
+    '  }',
     '  float inC = step(0.0, cuv.x) * step(cuv.x, 1.0) * step(0.0, cuv.y) * step(cuv.y, 1.0);',
     '',
     '  float E = 0.0;',
@@ -141,8 +158,31 @@
       uFalseColour: { value: 0 },
       uHatchOn: { value: 1 },
       uGreyTop: { value: 2.55 },
-      uPhotoDepth: { value: 3.9 }
+      uPhotoDepth: { value: 3.9 },
+      uFrameMaskCount: { value: 0 },
+      uFrameMaskEdges: { value: zeroEdges() },
+      uWhiteOnFrames: { value: 0 }
     };
+  }
+
+  function zeroEdges() {
+    var a = [], i;
+    for (i = 0; i < 12; i++) a.push(new THREE.Vector3(0, 0, 0));
+    return a;
+  }
+
+  // Copy the pure frame mask (result.frameOverlay: {count, edges: 12 x [a,b,c]}) into the shared uniforms.
+  // state.display.whiteOnFrames switches the white replacement on. No-op on the geometry caches.
+  function updateFrameUniforms(shared, result, state) {
+    var ov = result && result.frameOverlay, n = 0, i, e;
+    var arr = shared.uFrameMaskEdges.value;
+    for (i = 0; i < 12; i++) arr[i].set(0, 0, 0);
+    if (ov && ov.edges) {
+      n = Math.max(0, Math.min(3, ov.count | 0));
+      for (i = 0; i < n * 4; i++) { e = ov.edges[i]; if (e) arr[i].set(e[0], e[1], e[2]); }
+    }
+    shared.uFrameMaskCount.value = n;
+    shared.uWhiteOnFrames.value = (state && state.display && state.display.whiteOnFrames === true && n > 0) ? 1 : 0;
   }
 
   // opts: {albedo:'#rrggbb', albedoUpper:'#rrggbb', split:bool, hatchMode:0|1|2}
@@ -166,6 +206,6 @@
   PS.Shaders = {
     NEAR: NEAR, FAR: FAR, DEPTH_W: DEPTH_W,
     vertex: vertex, fragment: fragment,
-    createUniforms: createUniforms, createMaterial: createMaterial
+    createUniforms: createUniforms, createMaterial: createMaterial, updateFrameUniforms: updateFrameUniforms
   };
 })(window);

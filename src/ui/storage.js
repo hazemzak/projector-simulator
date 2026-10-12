@@ -305,9 +305,15 @@
     });
   }
 
-  function fmtVal(v) { return typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v); }
+  function fmtVal(v) {
+    if (v && typeof v === 'object') return v.label || v.id || 'column';
+    if (v === null || v === undefined) return 'none';
+    return typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v);
+  }
 
   function labelOfRoomKey(key) {
+    if (key === 'featureSet') return 'Room type';
+    if (key === 'column') return 'Room column';
     if (PS.Room && PS.Room.WALL_REFLECTANCE && key === 'wallReflectance') return PS.Room.WALL_REFLECTANCE.label;
     var ps = (PS.Room && PS.Room.PARAMS) || [];
     for (var i = 0; i < ps.length; i++) if (ps[i].key === key) return ps[i].label || key;
@@ -478,15 +484,15 @@
 
   function copyShareLink() {
     return PS.Share.encode(App.state).then(function (encoded) {
-      if (encoded.length > 6000) { setStatus('Share link exceeds 6,000 characters. Use Export project JSON instead.', true); return; }
       var url = root.location.href.split('#')[0] + '#s=' + encoded;
+      var note = url.length > 6000 ? ' The link is long (' + url.length + ' characters); Export project JSON is a safer way to keep it.' : '';
       if (root.navigator.clipboard && root.navigator.clipboard.writeText) return root.navigator.clipboard.writeText(url).then(function () {
-        setStatus('Share link copied. A user-loaded picture is not included; reload it after opening.');
+        setStatus('Share link copied. A user-loaded picture is not included; reload it after opening.' + note);
       });
       var field = el('textarea'); field.value = url; field.style.position = 'fixed'; field.style.opacity = '0';
       document.body.appendChild(field); field.select();
       var copied = document.execCommand('copy'); field.remove();
-      setStatus(copied ? 'Share link copied. A user-loaded picture is not included; reload it after opening.' : 'Could not copy the link. Use Export project JSON instead.', !copied);
+      setStatus(copied ? 'Share link copied. A user-loaded picture is not included; reload it after opening.' + note : 'Could not copy the link. Use Export project JSON instead.', !copied);
     }).catch(function (e) { setStatus('Could not make share link: ' + e.message, true); });
   }
 
@@ -558,6 +564,51 @@
         var bad = false;
         try { Model.parseProject(JSON.stringify({ schema: 'projsim/2', state: s })); } catch (e) { bad = /schema/.test(e.message); }
         return { ok: okState && okPl && again && bad, detail: 'state equal=' + okState + ', placements equal=' + okPl + ', text stable=' + again + ', wrong schema rejected=' + bad };
+      }],
+      ['storage.frames-roundtrip', function (A) {
+        var s = Model.startMainHall(clone(A.state));
+        s.frames = [
+          { id: 'f1', name: 'Frame 1', u: 0.5, bottom: 1.0, width: 0.8, height: 0.5, depth: 0.1 },
+          { id: 'f2', name: 'Frame 2', u: 1.9, bottom: 0.9, width: 1.0, height: 0.7, depth: 0 },
+          { id: 'f3', name: 'Frame 3', u: 6.0, bottom: 2.0, width: 0.6, height: 0.6, depth: 0.05 }
+        ];
+        var pl = Model.makePlacement(s, 'frames');
+        var back = Model.parseProject(Model.serializeProject(s, [pl]));
+        var okProject = deepEqual(back.state.frames, s.frames) && back.state.display.whiteOnFrames === true &&
+          deepEqual(back.placements[0].frames, s.frames) && back.state.room.featureSet === 'plain';
+        // autosave stores JSON.stringify(state) and restores it through parseProject
+        var auto = Model.parseProject(JSON.stringify({ schema: Model.SCHEMA, state: JSON.parse(JSON.stringify(s)), placements: [] })).state;
+        var okAuto = deepEqual(auto, s);
+        var four = clone(s); four.frames.push({ id: 'f4', name: 'Frame 4', u: 3, bottom: 1, width: 1, height: 1, depth: 0 });
+        var fourErr = Model.validateState(four).length > 0;
+        var old = Model.makePlacement(s, 'old'); delete old.frames; delete old.whiteOnFrames;
+        var cleared = Model.applyPlacement(s, old, { restoreRoom: false }).frames.length === 0;
+        var bad = false;
+        try { Model.parseProject(JSON.stringify({ schema: 'projsim/2', state: s })); } catch (e) { bad = /schema/.test(e.message); }
+        return { ok: okProject && okAuto && fourErr && cleared && bad,
+          detail: 'project=' + okProject + ', autosave=' + okAuto + ', fourth rejected=' + fourErr + ', old placement clears=' + cleared + ', projsim/2 rejected=' + bad };
+      }],
+      ['storage.share-frames-long-link', function (A) {
+        var before = clone(A.state), s = Model.startMainHall(clone(A.state)), pad = '';
+        for (var i = 0; i < 4000; i++) pad += String.fromCharCode(97 + (i * 7919 + (i >> 3) * 31) % 26);
+        s.frames = [0, 1, 2].map(function (n) {
+          return { id: 'f' + n, name: pad.slice(n * 1300, n * 1300 + 1300), u: 1 + n, bottom: 1, width: 0.5, height: 0.5, depth: 0.1 };
+        });
+        var text = Model.serializeProject(s, []), bytes = new TextEncoder().encode(text), bin = '';
+        for (var j = 0; j < bytes.length; j++) bin += String.fromCharCode(bytes[j]);
+        var plain = 'u' + root.btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        var proto = root.Storage.prototype, original = proto.setItem, writes = [];
+        return Promise.all([PS.Share.encode(s), PS.Share.decode(plain)]).then(function (a) {
+          return PS.Share.decode(a[0]).then(function (c) {
+            proto.setItem = function (key, value) { if (String(key).indexOf('projsim.') === 0) writes.push(key); return original.call(this, key, value); };
+            return A.openShareFragment(plain).then(function (opened) {
+              proto.setItem = original;
+              A.sharedLink = false; A.replaceState(before, 'selftest');
+              var ok = plain.length > 6000 && a[1].ok && deepEqual(a[1].state, s) && c.ok && deepEqual(c.state, s) && opened.ok && writes.length === 0;
+              return { ok: ok, detail: 'uncompressed length=' + plain.length + ', u equal=' + (a[1].ok && deepEqual(a[1].state, s)) + ', ' + a[0][0] + ' equal=' + (c.ok && deepEqual(c.state, s)) + ', writes=' + writes.length };
+            }, function (e) { proto.setItem = original; throw e; });
+          });
+        });
       }],
       ['storage.import-merge', function (A) {
         var a = Model.makePlacement(A.state, 'one'), b = Model.makePlacement(A.state, 'two');
